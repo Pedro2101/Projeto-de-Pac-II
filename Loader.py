@@ -126,17 +126,31 @@ def interpreta_resultados(analise, packer, strings):
                     if s not in encontrado["ips"]:
                         encontrado["ips"].append(s)
         
-        # procura por portas (numeros comuns)
-        if s.isdigit() and len(s) in [2,3,4,5]:
-            porta_num = int(s)
-            if porta_num in [21,22,23,25,80,443,445,3306,3389,5432,8080,8443]:
+        # ve se é porta
+        if s.isdigit():
+            num = int(s)
+            if num > 0 and num < 65536:
                 if s not in encontrado["portas"]:
                     encontrado["portas"].append(s)
         
-        # procura palavras sensiveis
-        palavras_sensiveis = ["admin", "password", "pass", "key", "secret", "license", "serial", "crack", "hack", "exploit", "shell", "cmd", "root", "user"]
-        for palavra in palavras_sensiveis:
-            if palavra in s.lower() and len(s) < 30:
+        # procura emails (coisa com @)
+        if "@" in s and "." in s and len(s) < 50:
+            if s not in encontrado["palavras_sensiveis"]:
+                encontrado["palavras_sensiveis"].append(s[:50])
+        
+        # procura URLs (coisa com http ou https)
+        if "http" in s.lower() and len(s) < 100:
+            if s not in encontrado["palavras_sensiveis"]:
+                encontrado["palavras_sensiveis"].append(s[:50])
+        
+        # procura caminhos do Windows (coisa com C:\)
+        if "C:\\" in s or "c:\\" in s:
+            if s not in encontrado["palavras_sensiveis"]:
+                encontrado["palavras_sensiveis"].append(s[:50])
+        
+        # ve se é palavra suspeita (qualquer coisa que nao seja numero)
+        if len(s) >= 4 and len(s) <= 25:
+            if not s.isdigit():
                 if s not in encontrado["palavras_sensiveis"]:
                     encontrado["palavras_sensiveis"].append(s[:50])
     
@@ -269,6 +283,22 @@ def tema3_pipeline():
                     with open("alvos.txt", "a") as f:
                         f.write(f"\n[KALI_ANALISE] {caminho}\n")
                         f.write(resultado_kali[:500])
+                    
+                    # pergunta se quer gerar exploit
+                    print()
+                    print("[*] LOADER: Quer gerar exploit para as portas que encontrei?")
+                    resp3 = input("   (s/n): ")
+                    
+                    if resp3 == "s" or resp3 == "S":
+                        for porta in portas_scan:
+                            print(f"[*] A gerar exploit para porta {porta}...")
+                            res = mandar_pro_kali(f"gerar_exploit {ip_alvo} {porta}")
+                            print(res)
+                            
+                            # guarda no ficheiro
+                            with open("alvos.txt", "a") as f:
+                                f.write(f"\n[EXPLOIT] {ip_alvo}:{porta}\n")
+                                f.write(res)
             else:
                 print("[*] LOADER: Nenhuma porta encontrada no scan.")
     

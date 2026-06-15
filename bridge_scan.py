@@ -1,5 +1,5 @@
 # Bridge de Network Scanning - Tema 12
-# Corre no Kali do Pedro recebe comandos do loader.py do Jeremias
+# Corre no Kali do Pedro recebe comandos o  meu loader.py (jeremias)
 
 import socket
 import subprocess
@@ -54,44 +54,40 @@ def analisa_radare2(caminho):
         return "Erro ao executar radare2"
 
 def gera_exploit_simples(ip, porta, caminho_malware):
-    # gera exploit no Kali (nao no loader)
-    nome_ficheiro = f"/tmp/exploit_{ip.replace('.', '_')}_{porta}.py"
-    
-    codigo = f'''# Exploit gerado pelo Kali (bridge_scan)
-# Baseado na analise do malware enviado pelo loader
+    nome = f"/tmp/exploit_{ip.replace('.', '_')}_{porta}.py"
+
+    if porta == 445 or porta == "445":
+        tipo = "EternalBlue"
+        pay = f'b"\\\\\\\\{ip}\\\\IPC$"'
+    elif porta == 22 or porta == "22":
+        tipo = "SSH"
+        pay = 'b"SSH-2.0-Exploit"'
+    elif porta == 80 or porta == 443 or porta == "80" or porta == "443":
+        tipo = "Web"
+        pay = f'"GET / HTTP/1.1\\r\\nHost: {ip}\\r\\n\\r\\n".encode()'
+    else:
+        tipo = "Generico"
+        pay = 'b"EXPLOIT_PAYLOAD"'
+
+    codigo = f'''# Exploit gerado no Kali
 # Alvo: {ip}:{porta}
+# Tipo: {tipo}
 
 import socket
 
-def exploit():
-    print(f"[*] A tentar explorar {ip}:{porta}")
-    try:
-        s = socket.socket()
-        s.settimeout(5)
-        s.connect(("{ip}", {porta}))
-        
-        if {porta} == 445:
-            payload = b"\\\\\\\\{ip}\\\\IPC$"
-        elif {porta} == 22:
-            payload = b"SSH-2.0-Exploit"
-        else:
-            payload = b"EXPLOIT_PAYLOAD"
-        
-        s.send(payload)
-        resposta = s.recv(1024)
-        print(f"[+] Resposta: {{resposta[:100]}}")
-        s.close()
-    except Exception as e:
-        print(f"[-] Falhou: {{e}}")
+s = socket.socket()
+s.settimeout(5)
+s.connect(("{ip}", {porta}))
 
-if __name__ == "__main__":
-    exploit()
+payload = {pay}
+s.send(payload)
+resp = s.recv(1024)
+print(resp[:100])
+s.close()
 '''
-    
-    with open(nome_ficheiro, "w") as f:
-        f.write(codigo)
-    
-    return f"Exploit gerado: {nome_ficheiro}"
+
+    open(nome, "w").write(codigo)
+    return f"Exploit gerado: {nome}"
 
 def recebe_ficheiro(conn):
     # recebe ficheiro enviado pelo loader
@@ -157,7 +153,7 @@ def processa(comando, conn=None):
             
             return resultado
         else:
-            return "ERRO: Comando ENVIAR_FICHEIRO sem conexao"
+            return "ERRO: Comando enviar_ficheiro sem conexao"
     
     elif comando.startswith("gerar_exploit"):
         # formato: gerar_exploit ip porta
