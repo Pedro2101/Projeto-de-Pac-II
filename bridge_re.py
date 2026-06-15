@@ -8,7 +8,7 @@ def pe_analise(caminho):
         f.close()
 
         if dados[:2] != b'MZ':
-            return {"erro": "Nao e um executavel (MZ em falta)"}
+            return {"erro": "Nao e um executavel falta o MZ"}
 
         pe_off = int.from_bytes(dados[0x3C:0x40], 'little')
         if dados[pe_off:pe_off+4] != b'PE\x00\x00':

@@ -305,16 +305,67 @@ def tema3_pipeline():
     else:
         if not interpretado["ips"]:
             print("[*] LOADER: Nenhum IP encontrado nas strings.")
-        if not KALI_IP:
-            print("[*] LOADER: Kali offline. Nao e possivel continuar.")
-        
-        # se nao tem ip mas tem packer, sugere descompressao
-        if interpretado["packers"] and "UPX" in interpretado["packers"] and KALI_IP:
-            print("[*] LOADER: UPX detectado. Recomendo descomprimir antes de analisar.")
-            resp3 = input("   Autoriza descompressao no Kali? (s/n): ")
-            if resp3.lower() == "s":
-                resultado_upx = mandar_ficheiro_pro_kali(caminho)
-                print(f"[Kali] {resultado_upx[:500]}")
+            print("[*] LOADER: A enviar malware para Kali (Radare2) para analise profunda...")
+            
+            if KALI_IP:
+                # manda automaticamente sem perguntar
+                resultado_kali = mandar_ficheiro_pro_kali(caminho)
+                print(f"\n[Kali] Resultado do Radare2:\n{resultado_kali[:500]}")
+                
+                # tenta extrair IPs e portas do resultado do Kali
+                # converte o resultado em strings para interpretar
+                strings_do_kali = {"strings": resultado_kali.split()}
+                kali_interpretado = interpreta_resultados(analise, packer, strings_do_kali)
+                
+                if kali_interpretado["ips"]:
+                    interpretado["ips"] = kali_interpretado["ips"]
+                    print(f"[*] LOADER: Radare2 encontrou IP: {kali_interpretado['ips'][0]}")
+                if kali_interpretado["portas"]:
+                    interpretado["portas"] = kali_interpretado["portas"]
+                    print(f"[*] LOADER: Radare2 encontrou portas: {kali_interpretado['portas']}")
+                
+                # se conseguiu encontrar algo, continua para o scan
+                if interpretado["ips"]:
+                    ip_alvo = interpretado["ips"][0]
+                    print(f"\n[*] LOADER: IP alvo: {ip_alvo}")
+                    print("[*] LOADER: Recomendo fazer scan a este IP.")
+                    resp = input("   Autoriza o scan? (s/n): ")
+                    
+                    if resp.lower() == "s":
+                        print()
+                        print("[*] A escanear...")
+                        resultado_scan = mandar_pro_kali(f"scan {ip_alvo}")
+                        print(resultado_scan[:500])
+                        
+                        with open("alvos.txt", "a") as f:
+                            f.write(f"\n[SCAN] {ip_alvo}\n")
+                            f.write(resultado_scan[:500])
+                        
+                        print()
+                        print("[*] LOADER: A interpretar resultados do scan...")
+                        portas_scan = interpreta_scan(resultado_scan)
+                        
+                        if portas_scan:
+                            print(f"[*] LOADER: Portas encontradas: {portas_scan}")
+                            print("[*] LOADER: Quer gerar exploit para as portas que encontrei?")
+                            resp2 = input("   (s/n): ")
+                            
+                            if resp2 == "s" or resp2 == "S":
+                                for porta in portas_scan:
+                                    print(f"[*] A gerar exploit para porta {porta}...")
+                                    res = mandar_pro_kali(f"gerar_exploit {ip_alvo} {porta}")
+                                    print(res)
+                                    
+                                    with open("alvos.txt", "a") as f:
+                                        f.write(f"\n[EXPLOIT] {ip_alvo}:{porta}\n")
+                                        f.write(res)
+                        else:
+                            print("[*] LOADER: Nenhuma porta encontrada no scan.")
+            else:
+                print("[*] LOADER: Kali offline. Nao e possivel continuar.")
+        else:
+            if not KALI_IP:
+                print("[*] LOADER: Kali offline. Nao e possivel continuar.")
     
     print()
     print("[+] Tema 3 concluido!")
