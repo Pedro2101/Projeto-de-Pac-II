@@ -145,7 +145,7 @@ def processa(comando, conn=None):
             
             # analise com radare2
             resultado += "\n[2] A analisar com radare2...\n"
-            resultado += analisa_radare2(caminho)
+            # resultado += analisa_radare2(caminho)
             
             # se tiver ip, sugere exploit
             # tenta extrair ip do nome ou de algum lugar
