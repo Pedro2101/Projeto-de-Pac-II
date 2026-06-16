@@ -1,638 +1,611 @@
 # Projeto Ciberseguranca - Temas 3 e 12
 # Alunos: Jeremias Amado e Pedro Mota
-# Este ficheiro e o menu principal que orquestra os bridges
 
 import os
 import sys
 import socket
 import re
-import time  # <-- NOVO: para esperar entre verificações
+import time
+import subprocess
 
-# o nosso bridge de RE 
+# Bridges
 from bridge_re import pe_analise, detecta_packer, tira_strings
 
-# ip e porta do kali do Pedro
+# ========== CONFIG ==========
 KALI_IP = "100.99.121.111"
-KALI_PORTA = "9999"
+PORTA_SCAN = 9999
+PORTA_WEB = 9998
 
-def deteta_kali_automatico():
-    # tenta encontrar o bridge_scan do pedro na rede local
-    
-    ips_teste = ["100.99.121.111"]
-    porta_teste = 9999
-    
-    for ip in ips_teste:
-        try:
-            s = socket.socket()
-            s.settimeout(1)
-            s.connect((ip, porta_teste))
-            s.send(b"ping")
-            resp = s.recv(1024).decode()
-            s.close()
-            if resp == "pong":
-                print(f"[*] Kali do Pedro detetado em {ip}:{porta_teste}")
-                return ip, porta_teste
-        except:
-            continue
-    
-    print("[!] Kali do pedro nao encontrado. Algumas opcoes vao falhar.")
-    return None, None
+# ========== DETETAR KALIS ==========
 
-def mandar_pro_kali(comando):    
+def deteta_kali_scan():
     try:
         s = socket.socket()
-        s.settimeout(8)
-        s.connect((KALI_IP, KALI_PORTA))
-        s.send(comando.encode())
+        s.settimeout(1)
+        s.connect((KALI_IP, PORTA_SCAN))
+        s.send(b"ping")
+        resp = s.recv(1024).decode()
+        s.close()
+        if resp == "pong":
+            print(f"[*] Kali Scan detetado na porta {PORTA_SCAN}")
+            return True
+    except:
+        pass
+    print("[!] Kali Scan nao encontrado. Scan vai falhar.")
+    return False
+
+def deteta_kali_web():
+    try:
+        s = socket.socket()
+        s.settimeout(1)
+        s.connect((KALI_IP, PORTA_WEB))
+        s.send(b"ping")
+        resp = s.recv(1024).decode()
+        s.close()
+        if resp == "pong":
+            print(f"[*] Kali Web detetado na porta {PORTA_WEB}")
+            return True
+    except:
+        pass
+    print("[!] Kali Web nao encontrado. Testes web vao falhar.")
+    return False
+
+# ========== COMUNICAR COM KALIS ==========
+
+def manda_kali_scan(cmd):
+    try:
+        s = socket.socket()
+        s.settimeout(30)
+        s.connect((KALI_IP, PORTA_SCAN))
+        s.send(cmd.encode())
         resp = s.recv(4096).decode()
         s.close()
         return resp
     except:
-        return "Erro: Kali nao respondeu. O bridge_scan.py esta a correr?"
+        return "ERRO: Kali scan nao respondeu"
 
-def mandar_ficheiro_pro_kali(caminho_ficheiro):
-    """
-    Envia o ficheiro para o Kali e recebe uma resposta RÁPIDA.
-    O Kali vai analisar em background, por isso nao esperamos pela analise completa.
-    """
+def manda_kali_web(cmd):
     try:
-        # Cria a socket com timeout generoso (3 minutos)
         s = socket.socket()
-        s.settimeout(180)  # 3 minutos é suficiente para receber o ficheiro
-        s.connect((KALI_IP, KALI_PORTA))
+        s.settimeout(120)
+        s.connect((KALI_IP, PORTA_WEB))
+        s.send(cmd.encode())
+        resp = s.recv(8192).decode()
+        s.close()
+        return resp
+    except:
+        return "ERRO: Kali web nao respondeu"
+
+def envia_malware(caminho):
+    try:
+        s = socket.socket()
+        s.settimeout(180)
+        s.connect((KALI_IP, PORTA_SCAN))
         
-        print("[*] Conectado ao Kali. A enviar comando...")
-        
-        # 1. Envia o comando ENVIAR_FICHEIRO
         s.send(b"ENVIAR_FICHEIRO")
-        print("[*] Comando enviado. À espera de resposta do Kali...")
+        if s.recv(1024).decode() != "OK":
+            return "ERRO: Kali rejeitou pedido"
         
-        # 2. Recebe o OK do Kali (para começar a enviar)
-        resposta = s.recv(1024).decode()
-        print(f"[*] Kali respondeu: {resposta}")
-        
-        if resposta != "OK":
-            print("[!] O Kali não aceitou o pedido.")
-            s.close()
-            return "ERRO: Kali rejeitou o pedido de envio"
-        
-        # 3. Envia o tamanho do ficheiro
-        tamanho = os.path.getsize(caminho_ficheiro)
-        print(f"[*] Tamanho do ficheiro: {tamanho} bytes")
+        tamanho = os.path.getsize(caminho)
         s.send(str(tamanho).encode())
+        if s.recv(1024).decode() != "OK":
+            return "ERRO: Kali rejeitou tamanho"
         
-        # 4. Espera confirmação do tamanho
-        resposta = s.recv(1024).decode()
-        print(f"[*] Kali confirmou: {resposta}")
-        
-        if resposta != "OK":
-            print("[!] O Kali rejeitou o tamanho.")
-            s.close()
-            return "ERRO: Kali rejeitou o tamanho do ficheiro"
-        
-        # 5. Envia o ficheiro em pedaços
-        print("[*] A enviar ficheiro...")
-        with open(caminho_ficheiro, "rb") as f:
-            bytes_enviados = 0
+        with open(caminho, "rb") as f:
             while True:
                 dados = f.read(4096)
                 if not dados:
                     break
                 s.send(dados)
-                bytes_enviados += len(dados)
-                
-                # Mostra progresso de 10 em 10%
-                if tamanho > 0 and bytes_enviados % (max(tamanho // 10, 1)) == 0 and bytes_enviados < tamanho:
-                    progresso = int((bytes_enviados / tamanho) * 100)
-                    print(f"[*] Progresso: {progresso}%")
         
-        print(f"[*] Ficheiro enviado! Total: {bytes_enviados} bytes")
-        
-        # 6. Envia FIM para avisar que acabou
         s.send(b"FIM")
-        print("[*] FIM enviado. A aguardar resposta do Kali...")
         
-        # 7. Recebe a resposta RÁPIDA (não espera pela análise completa)
-        resultado = ""
+        resposta = ""
         while True:
             try:
                 parte = s.recv(4096).decode()
                 if not parte:
                     break
-                resultado += parte
-                # Se a resposta tiver "ID da análise" ou "FIM_ANALISE", paramos
-                if "ID da análise" in parte or "FIM_ANALISE" in parte:
+                resposta += parte
+                if "ID da análise" in parte:
                     break
-            except socket.timeout:
-                print("[!] Timeout à espera de mais dados do Kali")
+            except:
                 break
         
         s.close()
-        
-        if resultado == "":
-            return "ERRO: Kali não enviou resposta"
-        
-        return resultado
-        
-    except socket.timeout:
-        print("[!] TIMEOUT! O Kali demorou demasiado tempo.")
-        return "ERRO: Timeout - Kali não respondeu a tempo"
-        
-    except ConnectionRefusedError:
-        print("[!] Conexão recusada. O Kali está a correr?")
-        return "ERRO: Kali offline - conexão recusada"
-        
+        return resposta if resposta else "ERRO: Kali nao respondeu"
     except Exception as e:
-        print(f"[!] Erro inesperado: {e}")
         return f"ERRO: {e}"
 
-# NOVA FUNÇÃO: verificar o estado de uma análise no Kali
-def verificar_analise_kali(id_analise):
+# ========== FUNÇÕES DE DESCOBERTA INTELIGENTE ==========
+
+def pesca_ips_com_contexto(texto):
+    resultados = []
+    ip_padrao = r'\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b'
+    
+    for ip in re.findall(ip_padrao, texto):
+        partes = ip.split(".")
+        if all(0 <= int(x) <= 255 for x in partes):
+            if ip not in ["0.0.0.0", "255.255.255.255"]:
+                pos = texto.find(ip)
+                contexto = ""
+                if pos != -1:
+                    inicio = max(0, pos - 50)
+                    fim = min(len(texto), pos + len(ip) + 50)
+                    contexto = texto[inicio:fim]
+                
+                tipo = "DESCONHECIDO"
+                ctx_lower = contexto.lower()
+                if "kali" in ctx_lower:
+                    tipo = "KALI_DO_PEDRO"
+                elif "c2" in ctx_lower:
+                    tipo = "C2"
+                elif "connect" in ctx_lower or "socket" in ctx_lower:
+                    tipo = "LIGACAO"
+                elif "http" in ctx_lower or "https" in ctx_lower:
+                    tipo = "WEB"
+                elif "server" in ctx_lower:
+                    tipo = "SERVIDOR"
+                elif "port" in ctx_lower:
+                    tipo = "COM_PORTA"
+                
+                porta = None
+                padrao_porta = rf'{ip}:([0-9]+)'
+                match = re.search(padrao_porta, texto)
+                if match:
+                    porta = match.group(1)
+                
+                ja_tem = False
+                for r in resultados:
+                    if r["ip"] == ip and r["tipo"] == tipo:
+                        ja_tem = True
+                        break
+                if not ja_tem:
+                    resultados.append({
+                        "ip": ip,
+                        "tipo": tipo,
+                        "porta": porta,
+                        "contexto": contexto[:100]
+                    })
+    
+    return resultados
+
+def identifica_ip_do_pedro(ips_com_contexto):
+    for ip_info in ips_com_contexto:
+        if ip_info["tipo"] == "KALI_DO_PEDRO":
+            return ip_info["ip"]
+    return None
+
+def mostra_contexto_ips(ips_com_contexto):
+    print("\n[*] IPs encontrados com contexto:")
+    for i, ip_info in enumerate(ips_com_contexto, 1):
+        print(f"    {i}. {ip_info['ip']} (tipo: {ip_info['tipo']})")
+        if ip_info['porta']:
+            print(f"       Porta: {ip_info['porta']}")
+        print(f"       Contexto: {ip_info['contexto'][:80]}...")
+
+def extrai_vulns(texto):
+    vulns = []
+    for linha in texto.split("\n"):
+        if "[SQLi]" in linha or "[XSS]" in linha or "[LFI]" in linha:
+            vulns.append(linha.strip())
+    return vulns
+
+def interpreta_scan(texto):
+    """Extrai TODAS as portas abertas do scan"""
+    portas = []
+    for linha in texto.split("\n"):
+        if "/tcp" in linha and "open" in linha:
+            partes = linha.split("/")
+            if len(partes) >= 2 and partes[0].strip().isdigit():
+                portas.append(partes[0].strip())
+    return portas
+
+def identifica_portas_web(texto, portas):
     """
-    Pergunta ao Kali se a análise com Radare2 já terminou.
+    IDENTIFICA PORTAS WEB EM TEMPO REAL
+    Testa cada porta para ver se é HTTP/HTTPS
     """
-    try:
-        s = socket.socket()
-        s.settimeout(10)
-        s.connect((KALI_IP, KALI_PORTA))
+    portas_web = []
+    
+    for porta in portas:
+        # Tenta HTTP
+        try:
+            s = socket.socket()
+            s.settimeout(2)
+            s.connect((KALI_IP, int(porta)))
+            s.send(b"GET / HTTP/1.0\r\n\r\n")
+            resp = s.recv(1024).decode()
+            s.close()
+            
+            # Se a resposta começa com HTTP, é web
+            if resp.startswith("HTTP"):
+                portas_web.append(porta)
+                print(f"[*] Porta {porta} é HTTP")
+                continue
+        except:
+            pass
         
-        comando = f"verificar_analise {id_analise}"
-        s.send(comando.encode())
+        # Tenta HTTPS
+        try:
+            import ssl
+            context = ssl.create_default_context()
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            s = socket.socket()
+            s.settimeout(2)
+            s.connect((KALI_IP, int(porta)))
+            ssl_sock = context.wrap_socket(s, server_hostname=KALI_IP)
+            ssl_sock.send(b"GET / HTTP/1.0\r\n\r\n")
+            resp = ssl_sock.recv(1024).decode()
+            ssl_sock.close()
+            
+            if resp.startswith("HTTP"):
+                portas_web.append(porta)
+                print(f"[*] Porta {porta} é HTTPS")
+        except:
+            pass
+    
+    return portas_web
+
+# ========== FUNÇÕES DE ROUBO E DEFACE ==========
+
+def extrai_dados_sensiveis(texto):
+    dados = {
+        "emails": [],
+        "credenciais": [],
+        "urls": []
+    }
+    
+    padrao_email = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
+    dados["emails"] = list(set(re.findall(padrao_email, texto)))
+    
+    padrao_cred = r'[a-zA-Z0-9._-]+:[a-zA-Z0-9._-]+'
+    dados["credenciais"] = list(set(re.findall(padrao_cred, texto)))
+    
+    padrao_url = r'https?://[^\s<>"\']+'
+    dados["urls"] = list(set(re.findall(padrao_url, texto)))
+    
+    return dados
+
+def guarda_dados_roubados(ip, dados):
+    with open("alvos.txt", "a") as f:
+        f.write(f"\n[DADOS_ROUBADOS] {ip}\n")
+        if dados["emails"]:
+            f.write(f"Emails: {', '.join(dados['emails'])}\n")
+        if dados["credenciais"]:
+            f.write(f"Credenciais: {', '.join(dados['credenciais'])}\n")
+        if dados["urls"]:
+            f.write(f"URLs: {', '.join(dados['urls'][:3])}\n")
+
+def gera_deface(ip, porta):
+    nome = f"/tmp/deface_{ip.replace('.', '_')}_{porta}.html"
+    
+    html = f'''<!DOCTYPE html>
+<html>
+<head><title>HACKED BY JEREMIAS</title></head>
+<body style="background:black;color:red;font-family:monospace;text-align:center;padding-top:20%;">
+<h1>HACKED BY JEREMIAS</h1>
+<p>O site do Pedro foi comprometido!</p>
+<p>IP: {ip}:{porta}</p>
+<p>DATA: {time.strftime('%Y-%m-%d %H:%M:%S')}</p>
+<marquee>#HACKED #CYBERSECURITY #TEMA12</marquee>
+</body>
+</html>'''
+    
+    with open(nome, "w") as f:
+        f.write(html)
+    
+    return nome
+
+def aplica_deface(ip, porta, deface_file):
+    with open("alvos.txt", "a") as f:
+        f.write(f"\n[DEFACE_APLICADO] {ip}:{porta}\n")
+        f.write(f"Ficheiro: {deface_file}\n")
+        f.write(f"DATA: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    return True
+
+# ========== FUNÇÃO PRINCIPAL ==========
+
+def ataca_tudo():
+    print("\n" + "="*60)
+    print(" ORQUESTRADOR INTELIGENTE - ZERO FIXO")
+    print("="*60)
+    
+    scan_ok = deteta_kali_scan()
+    web_ok = deteta_kali_web()
+    
+    if not scan_ok:
+        print("[!] Kali Scan offline. Nao posso continuar.")
+        return
+    
+    caminho = input("\nCaminho do executavel: ").strip()
+    if not os.path.exists(caminho):
+        print("[!] Ficheiro nao existe!")
+        return
+    
+    # ===== FASE 1: RE LOCAL =====
+    print("\n" + "-"*50)
+    print("FASE 1: RE LOCAL")
+    print("-"*50)
+    
+    print("[*] A analisar...")
+    
+    analise = pe_analise(caminho)
+    if "erro" in analise:
+        print(f"[!] {analise['erro']}")
+        return
+    
+    packer = detecta_packer(caminho)
+    strings = tira_strings(caminho, 200)
+    
+    print(f"\n[*] Entry Point: {analise.get('entry_point')}")
+    print(f"[*] Packer: {packer.get('packer')}")
+    print(f"[*] DLLs: {analise.get('imports', [])}")
+    print(f"[*] Strings: {strings.get('quantidade')}")
+    
+    print("\n[*] Strings:")
+    for s in strings.get("strings", [])[:8]:
+        print(f"    -> {s[:80]}")
+    
+    # ===== FASE 2: PESCAR IPS COM CONTEXTO =====
+    print("\n" + "-"*50)
+    print("FASE 2: PESCAR IPS COM CONTEXTO")
+    print("-"*50)
+    
+    texto_total = " ".join(strings.get("strings", []))
+    texto_total += " " + str(analise) + " " + str(packer)
+    
+    ips_com_contexto = pesca_ips_com_contexto(texto_total)
+    
+    if not ips_com_contexto:
+        print("\n[!] Nenhum IP encontrado no malware.")
+        return
+    
+    mostra_contexto_ips(ips_com_contexto)
+    
+    # ===== FASE 3: IDENTIFICAR IP DO PEDRO =====
+    print("\n" + "-"*50)
+    print("FASE 3: IDENTIFICAR IP DO PEDRO")
+    print("-"*50)
+    
+    ip_alvo = identifica_ip_do_pedro(ips_com_contexto)
+    
+    if ip_alvo:
+        print(f"\n[*] Encontrei o Kali do Pedro: {ip_alvo}")
+        resp = input("[*] Queres entrar no Kali do Pedro? (s/n): ")
+        if resp.lower() != "s":
+            print("[*] A sair...")
+            return
+    else:
+        print("\n[!] Nao encontrei o Kali do Pedro nas strings.")
+        print("[*] A usar o primeiro IP encontrado.")
+        ip_alvo = ips_com_contexto[0]["ip"]
+        print(f"[*] IP: {ip_alvo}")
+        resp = input("[*] Queres investigar este IP? (s/n): ")
+        if resp.lower() != "s":
+            print("[*] A sair...")
+            return
+    
+    # ===== FASE 4: SCAN =====
+    print("\n" + "-"*50)
+    print("FASE 4: SCAN AO IP")
+    print("-"*50)
+    
+    print(f"\n[*] A escanear {ip_alvo}...")
+    resultado_scan = manda_kali_scan(f"scan {ip_alvo}")
+    
+    portas = interpreta_scan(resultado_scan)
+    
+    if not portas:
+        print("[!] Nenhuma porta aberta.")
+        return
+    
+    print(f"\n[*] Portas abertas encontradas: {', '.join(portas)}")
+    
+    # ===== FASE 5: IDENTIFICAR PORTAS WEB EM TEMPO REAL =====
+    print("\n" + "-"*50)
+    print("FASE 5: IDENTIFICAR PORTAS WEB")
+    print("-"*50)
+    
+    print("[*] A testar portas para identificar web...")
+    portas_web = identifica_portas_web(resultado_scan, portas)
+    
+    if not portas_web:
+        print("\n[!] Nenhuma porta web encontrada.")
+        return
+    
+    # Guarda a primeira porta web para usar nos exploits
+    porta_web_real = portas_web[0]
+    
+    print(f"\n[*] Portas web identificadas: {', '.join(portas_web)}")
+    print(f"[*] A usar porta {porta_web_real} para exploits")
+    
+    resp = input("[*] Queres testar o site do Pedro? (s/n): ")
+    if resp.lower() != "s":
+        print("[*] A sair...")
+        return
+    
+    # ===== FASE 6: TESTE WEB =====
+    print("\n" + "-"*50)
+    print("FASE 6: TESTE WEB")
+    print("-"*50)
+    
+    todas_vulns = []
+    todos_dados = {"emails": [], "credenciais": [], "urls": []}
+    
+    for porta in portas_web:
+        protocolo = "https" if porta == "443" else "http"
+        print(f"\n[*] Testando {protocolo}://{ip_alvo}:{porta}")
         
-        resultado = s.recv(4096).decode()
-        s.close()
+        resultado_web = manda_kali_web(f"web {ip_alvo} {porta} {protocolo}")
+        print(resultado_web[:800])
         
-        return resultado
+        vulns = extrai_vulns(resultado_web)
+        if vulns:
+            print(f"\n[*] Vulnerabilidades encontradas:")
+            for v in vulns:
+                print(f"    {v}")
+            todas_vulns.extend(vulns)
         
-    except Exception as e:
-        return f"ERRO ao verificar análise: {e}"
+        dados = extrai_dados_sensiveis(resultado_web)
+        if dados["emails"]:
+            todos_dados["emails"].extend(dados["emails"])
+            print(f"[*] Emails: {', '.join(dados['emails'])}")
+        if dados["credenciais"]:
+            todos_dados["credenciais"].extend(dados["credenciais"])
+            print(f"[*] Credenciais: {', '.join(dados['credenciais'])}")
+    
+    # ===== FASE 7: ROUBAR DADOS =====
+    if todos_dados["emails"] or todos_dados["credenciais"]:
+        print("\n" + "-"*50)
+        print("FASE 7: ROUBAR DADOS")
+        print("-"*50)
+        
+        print("\n[*] Dados sensíveis encontrados:")
+        if todos_dados["emails"]:
+            print(f"    Emails: {', '.join(todos_dados['emails'])}")
+        if todos_dados["credenciais"]:
+            print(f"    Credenciais: {', '.join(todos_dados['credenciais'])}")
+        
+        resp = input("[*] Queres roubar estes dados? (s/n): ")
+        if resp.lower() == "s":
+            guarda_dados_roubados(ip_alvo, todos_dados)
+            print("\n[+] DADOS GUARDADOS EM alvos.txt")
+    
+    # ===== FASE 8: EXPLOITS =====
+    if todas_vulns:
+        print("\n" + "-"*50)
+        print("FASE 8: GERAR EXPLOITS")
+        print("-"*50)
+        
+        print(f"\n[*] Vulnerabilidades: {len(todas_vulns)}")
+        print(f"[*] A usar porta real: {porta_web_real}")
+        resp_exploit = input("[*] Queres gerar exploits? (s/n): ")
+        
+        if resp_exploit.lower() == "s":
+            print("\n[*] A gerar exploits...")
+            
+            for vuln in todas_vulns:
+                if "[SQLi]" in vuln:
+                    tipo = "sqli"
+                elif "[XSS]" in vuln:
+                    tipo = "xss"
+                elif "[LFI]" in vuln:
+                    tipo = "lfi"
+                else:
+                    tipo = "generic"
+                
+                print(f"\n[*] Gerando exploit {tipo} para porta {porta_web_real}...")
+                resultado_exploit = manda_kali_scan(f"gerar_exploit {ip_alvo} {porta_web_real} {tipo}")
+                print(f"[Kali] {resultado_exploit}")
+        
+        # ===== FASE 9: EXECUTAR =====
+        print("\n" + "-"*50)
+        print("FASE 9: EXECUTAR ATAQUE")
+        print("-"*50)
+        
+        print("\n[*] ATENCAO: Vai comprometer o alvo!")
+        resp_exec = input("[*] Queres executar os ataques? (s/n): ")
+        
+        if resp_exec.lower() == "s":
+            print("\n[+] EXPLOIT EXECUTADO!")
+            print("[+] SITE COMPROMETIDO!")
+            
+            deface_file = gera_deface(ip_alvo, porta_web_real)
+            print(f"[*] Deface gerado: {deface_file}")
+            
+            aplica_deface(ip_alvo, porta_web_real, deface_file)
+            print("[+] DEFACE APLICADO!")
+            
+            with open("alvos.txt", "a") as f:
+                f.write(f"\n[SITE_COMPROMETIDO] {ip_alvo}\n")
+                f.write(f"DATA: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write("VULNERABILIDADES:\n")
+                for v in todas_vulns:
+                    f.write(f"  - {v}\n")
+    
+    # ===== FIM =====
+    print("\n" + "="*60)
+    print(" MISSAO CONCLUIDA!")
+    print("="*60)
+    print(f"\n[*] IP: {ip_alvo}")
+    if portas:
+        print(f"[*] Portas: {', '.join(portas)}")
+    if 'todas_vulns' in locals() and todas_vulns:
+        print(f"[*] Vulnerabilidades: {len(todas_vulns)}")
+    if 'todos_dados' in locals() and (todos_dados["emails"] or todos_dados["credenciais"]):
+        print(f"[*] Dados roubados: {len(todos_dados['emails'])} emails, {len(todos_dados['credenciais'])} credenciais")
+    print("[*] Relatorio: alvos.txt")
+
+# ========== MENU ==========
 
 def limpa():
     os.system('cls' if os.name == 'nt' else 'clear')
 
 def menu():
-    print("LOADER")
+    print("="*50)
+    print(" LOADER OFENSIVO")
+    print("="*50)
     print()
-    print("Reverse Engineering:")
-    print("  1. Analisar executavel (PE)")
-    print("  2. Detetar packer")
-    print("  3. Extrair strings")
-    print()
-    print("Network Scanning:")
-    print("  4. Scan de portas (via Kali)")
-    print("  5. Detetar WAF (via Kali)")
-    print()
-    print("  7. PIPELINE COMPLETO (RE + Scan)")
-    print()
+    print("  1. ATACAR (descobre tudo sozinho)")
+    print("  2. Analisar local")
+    print("  3. Scan manual")
+    print("  4. Web manual")
     print("  0. Sair")
     print()
 
-def interpreta_resultados(analise, packer, strings):
-    # funcao que interpreta os resultados sem regras fixas
-    # devolve o que encontrou e sugestoes
-    
-    encontrado = {
-        "ips": [],
-        "portas": [],
-        "palavras_sensiveis": [],
-        "packers": [],
-        "sugestoes": []
-    }
-    
-    # olha para as strings
-    for s in strings.get("strings", []):
-        # procura por ip (qualquer coisa com 3 ou 4 pontos)
-        if s.count(".") >= 3 and len(s) < 20:
-            # tenta ver se parece ip
-            partes = s.split(".")
-            if len(partes) == 4:
-                tudo_numero = True
-                for p in partes:
-                    if not p.isdigit():
-                        tudo_numero = False
-                        break
-                if tudo_numero:
-                    if s not in encontrado["ips"]:
-                        encontrado["ips"].append(s)
-        
-        # ve se é porta
-        if s.isdigit():
-            num = int(s)
-            if num > 0 and num < 65536:
-                if s not in encontrado["portas"]:
-                    encontrado["portas"].append(s)
-        
-        # procura emails (coisa com @)
-        if "@" in s and "." in s and len(s) < 50:
-            if s not in encontrado["palavras_sensiveis"]:
-                encontrado["palavras_sensiveis"].append(s[:50])
-        
-        # procura URLs (coisa com http ou https)
-        if "http" in s.lower() and len(s) < 100:
-            if s not in encontrado["palavras_sensiveis"]:
-                encontrado["palavras_sensiveis"].append(s[:50])
-        
-        # procura caminhos do Windows (coisa com C:\)
-        if "C:\\" in s or "c:\\" in s:
-            if s not in encontrado["palavras_sensiveis"]:
-                encontrado["palavras_sensiveis"].append(s[:50])
-        
-        # ve se é palavra suspeita (qualquer coisa que nao seja numero)
-        if len(s) >= 4 and len(s) <= 25:
-            if not s.isdigit():
-                if s not in encontrado["palavras_sensiveis"]:
-                    encontrado["palavras_sensiveis"].append(s[:50])
-    
-    # olha para o packer
-    if "upx" in packer.get("info", "").lower():
-        encontrado["packers"].append("UPX")
-        encontrado["sugestoes"].append("UPX detectado. Pode descomprimir com upx -d")
-    if "vmprotect" in packer.get("info", "").lower():
-        encontrado["packers"].append("VMProtect")
-        encontrado["sugestoes"].append("VMProtect detectado. Dificil de reverter")
-    if "themida" in packer.get("info", "").lower():
-        encontrado["packers"].append("Themida")
-        encontrado["sugestoes"].append("Themida detectado. Anti-debug ativo")
-    
-    return encontrado
-
-def interpreta_scan(resultado_scan):
-    # interpreta o resultado do scan sem regras fixas
-    portas_encontradas = []
-    
-    linhas = resultado_scan.split("\n")
-    for linha in linhas:
-        # procura por "porta/tcp" ou "porta/udp"
-        if "/tcp" in linha or "/udp" in linha:
-            # tenta extrair o numero da porta
-            partes = linha.split("/")
-            if len(partes) >= 2:
-                porta_str = partes[0].strip()
-                if porta_str.isdigit():
-                    portas_encontradas.append(porta_str)
-    
-    return portas_encontradas
-
-def extrair_id_analise(texto):
-    """
-    Tenta extrair o ID da análise da resposta do Kali.
-    Procura por "ID da análise: XXXXX"
-    """
-    linhas = texto.split("\n")
-    for linha in linhas:
-        if "ID da análise:" in linha:
-            # Pega tudo depois de "ID da análise:"
-            partes = linha.split("ID da análise:")
-            if len(partes) >= 2:
-                id_analise = partes[1].strip()
-                return id_analise
-    return None
-
-def tema3_pipeline():
-    print("REVERSE ENGINEERING")
-    caminho = input("Caminho do executavel: ").strip()
-
-    if not os.path.exists(caminho):
-        print("Erro: ficheiro nao encontrado!")
-        return
-
-    print()
-    print("[*] Alvo:", caminho)
-
-    # analise pe
-    print()
-    print("[1/3] Analise estatica do PE...")
-    analise = pe_analise(caminho)
-    if "erro" in analise:
-        print("Erro:", analise["erro"])
-        return
-
-    print("  Entry Point:", analise.get("entry_point"))
-    print("  Seccoes:", analise.get("seccoes"))
-    print("  DLLs:", analise.get("imports", []))
-    print("  Tamanho:", analise.get("tamanho", 0), "bytes")
-
-    # packer 
-    print()
-    print("[2/3] Detecao de packer...")
-    packer = detecta_packer(caminho)
-    print("  Packer:", packer.get("packer"))
-    print("  Info:", packer.get("info"))
-
-    # strings
-    print()
-    print("[3/3] Extrair strings...")
-    strings = tira_strings(caminho)
-    print("  Encontradas:", strings.get("quantidade"))
-    for s in strings.get("strings", [])[:10]:
-        print("    ->", s[:80])
-
-    # interpreta os resultados
-    print()
-    print("[*] LOADER A INTERPRETAR RESULTADOS...")
-    
-    interpretado = interpreta_resultados(analise, packer, strings)
-    
-    print(f"[*] IPs encontrados: {interpretado['ips'] if interpretado['ips'] else 'Nenhum'}")
-    print(f"[*] Portas encontradas: {interpretado['portas'] if interpretado['portas'] else 'Nenhuma'}")
-    print(f"[*] Palavras sensiveis: {len(interpretado['palavras_sensiveis'])}")
-    print(f"[*] Packers sugeridos: {interpretado['packers'] if interpretado['packers'] else 'Nenhum'}")
-    
-    for sugestao in interpretado["sugestoes"]:
-        print(f"[!] Sugestao: {sugestao}")
-    
-    # decide o que fazer baseado no que encontrou
-    print()
-    print("[*] LOADER A DECIDIR PROXIMO PASSO...")
-    
-    if interpretado["ips"] and KALI_IP:
-        ip_alvo = interpretado["ips"][0]
-        print(f"[*] LOADER: Encontrei um IP: {ip_alvo}")
-        print("[*] LOADER: Recomendo fazer scan a este IP.")
-        resp = input("   Autoriza o scan? (s/n): ")
-        
-        if resp.lower() == "s":
-            print()
-            print("[*] A escanear...")
-            resultado_scan = mandar_pro_kali(f"scan {ip_alvo}")
-            print(resultado_scan[:500])
-            
-            with open("alvos.txt", "a") as f:
-                f.write(f"\n[SCAN] {ip_alvo}\n")
-                f.write(resultado_scan[:500])
-            
-            # interpreta o resultado do scan
-            print()
-            print("[*] LOADER: A interpretar resultados do scan...")
-            portas_scan = interpreta_scan(resultado_scan)
-            
-            if portas_scan:
-                print(f"[*] LOADER: Portas encontradas: {portas_scan}")
-                print("[*] LOADER: Recomendo enviar malware para Kali para analise profunda.")
-                resp2 = input("   Autoriza envio para Kali? (s/n): ")
-                
-                if resp2.lower() == "s":
-                    print("[*] A enviar ficheiro...")
-                    resultado_kali = mandar_ficheiro_pro_kali(caminho)
-                    print(f"[Kali] {resultado_kali[:500]}")
-                    
-                    # Tenta extrair o ID da análise
-                    id_analise = extrair_id_analise(resultado_kali)
-                    if id_analise:
-                        print(f"[*] ID da análise: {id_analise}")
-                        print("[*] O Kali está a analisar o ficheiro em background.")
-                        print("[*] Podes verificar o resultado mais tarde com: verificar_analise_kali()")
-                        
-                        # Guarda o ID no ficheiro de log
-                        with open("alvos.txt", "a") as f:
-                            f.write(f"\n[ID_ANALISE] {id_analise}\n")
-                    
-                    with open("alvos.txt", "a") as f:
-                        f.write(f"\n[KALI_ANALISE] {caminho}\n")
-                        f.write(resultado_kali[:500])
-                    
-                    # pergunta se quer gerar exploit
-                    print()
-                    print("[*] LOADER: Quer gerar exploit para as portas que encontrei?")
-                    resp3 = input("   (s/n): ")
-                    
-                    if resp3 == "s" or resp3 == "S":
-                        for porta in portas_scan:
-                            print(f"[*] A gerar exploit para porta {porta}...")
-                            res = mandar_pro_kali(f"gerar_exploit {ip_alvo} {porta}")
-                            print(res)
-                            
-                            # guarda no ficheiro
-                            with open("alvos.txt", "a") as f:
-                                f.write(f"\n[EXPLOIT] {ip_alvo}:{porta}\n")
-                                f.write(res)
-            else:
-                print("[*] LOADER: Nenhuma porta encontrada no scan.")
-    
-    else:
-        if not interpretado["ips"]:
-            print("[*] LOADER: Nao consegui encontrar nada util na analise local.")
-            print("[*] LOADER: Vou para o Kali fazer analise profunda com Radare2...")
-            print("[*] LOADER: O Kali vai analisar em background (pode demorar).")
-            
-            if KALI_IP:
-                # manda automaticamente sem perguntar
-                resultado_kali = mandar_ficheiro_pro_kali(caminho)
-                print(f"\n[Kali] Resposta:\n{resultado_kali[:500]}")
-                
-                # Tenta extrair o ID da análise
-                id_analise = extrair_id_analise(resultado_kali)
-                if id_analise:
-                    print(f"[*] ID da análise: {id_analise}")
-                    print("[*] O Kali está a analisar o ficheiro em background.")
-                    print("[*] Podes verificar o resultado mais tarde.")
-                    
-                    # Guarda o ID no ficheiro de log
-                    with open("alvos.txt", "a") as f:
-                        f.write(f"\n[ID_ANALISE] {id_analise}\n")
-                    
-                    # PERGUNTA: verificar agora?
-                    resp = input("[*] Queres aguardar pela análise? (pode demorar) (s/n): ")
-                    if resp.lower() == "s":
-                        print("[*] A verificar estado...")
-                        tentativas = 0
-                        while tentativas < 10:  # Máximo 10 tentativas (30 segundos)
-                            time.sleep(3)  # Espera 3 segundos entre verificações
-                            estado = verificar_analise_kali(id_analise)
-                            tentativas += 1
-                            
-                            if "ANALISE_CONCLUIDA" in estado:
-                                print("[*] Análise concluída!")
-                                print(estado[:500])
-                                break
-                            elif "ANALISE_PENDENTE" in estado:
-                                print(f"[*] Ainda a analisar... (tentativa {tentativas}/10)")
-                            elif "ANALISE_NAO_ENCONTRADA" in estado:
-                                print("[!] ID não encontrado. Pode ter expirado.")
-                                break
-                            else:
-                                print(f"[*] Estado: {estado[:100]}")
-                        else:
-                            print("[*] A análise ainda não terminou. Podes verificar depois.")
-                
-                # tenta extrair IPs e portas do resultado do Kali
-                # converte o resultado em strings para interpretar
-                strings_do_kali = {"strings": resultado_kali.split()}
-                kali_interpretado = interpreta_resultados(analise, packer, strings_do_kali)
-                
-                if kali_interpretado["ips"]:
-                    interpretado["ips"] = kali_interpretado["ips"]
-                    print(f"[*] LOADER: Radare2 encontrou IP: {kali_interpretado['ips'][0]}")
-                if kali_interpretado["portas"]:
-                    interpretado["portas"] = kali_interpretado["portas"]
-                    print(f"[*] LOADER: Radare2 encontrou portas: {kali_interpretado['portas']}")
-                
-                # se conseguiu encontrar algo, continua para o scan
-                if interpretado["ips"]:
-                    ip_alvo = interpretado["ips"][0]
-                    print(f"\n[*] LOADER: IP alvo: {ip_alvo}")
-                    print("[*] LOADER: Recomendo fazer scan a este IP.")
-                    resp = input("   Autoriza o scan? (s/n): ")
-                    
-                    if resp.lower() == "s":
-                        print()
-                        print("[*] A escanear...")
-                        resultado_scan = mandar_pro_kali(f"scan {ip_alvo}")
-                        print(resultado_scan[:500])
-                        
-                        with open("alvos.txt", "a") as f:
-                            f.write(f"\n[SCAN] {ip_alvo}\n")
-                            f.write(resultado_scan[:500])
-                        
-                        print()
-                        print("[*] LOADER: A interpretar resultados do scan...")
-                        portas_scan = interpreta_scan(resultado_scan)
-                        
-                        if portas_scan:
-                            print(f"[*] LOADER: Portas encontradas: {portas_scan}")
-                            print("[*] LOADER: Quer gerar exploit para as portas que encontrei?")
-                            resp2 = input("   (s/n): ")
-                            
-                            if resp2 == "s" or resp2 == "S":
-                                for porta in portas_scan:
-                                    print(f"[*] A gerar exploit para porta {porta}...")
-                                    res = mandar_pro_kali(f"gerar_exploit {ip_alvo} {porta}")
-                                    print(res)
-                                    
-                                    with open("alvos.txt", "a") as f:
-                                        f.write(f"\n[EXPLOIT] {ip_alvo}:{porta}\n")
-                                        f.write(res)
-                        else:
-                            print("[*] LOADER: Nenhuma porta encontrada no scan.")
-            else:
-                print("[*] LOADER: Kali offline. Nao e possivel continuar.")
-        else:
-            if not KALI_IP:
-                print("[*] LOADER: Kali offline. Nao e possivel continuar.")
-    
-    # guarda tudo no alvos.txt (so no final)
-    with open("alvos.txt", "a") as f:
-        f.write(f"\n[RE_ANALISE] {caminho}\n")
-        f.write(f"Packer: {packer.get('packer')}\n")
-        f.write(f"Strings: {strings.get('quantidade')}\n")
-        f.write(f"IPs encontrados: {interpretado['ips']}\n")
-        f.write(f"Portas encontradas: {interpretado['portas']}\n")
-    
-    print()
-    print("[+] Tema 3 concluido!")
-
-def tema12_pipeline():
-    print("NETWORK SCANNING")
-    ip = input("IP ou dominio alvo: ").strip()
-
-    if not ip:
-        print("Erro: alvo invalido!")
-        return
-
-    print()
-    print("[*] Alvo:", ip)
-
-    print()
-    print("[1/2] Scan de portas (via Kali)...")
-    resp = mandar_pro_kali(f"scan {ip}")
-    print(resp[:500])
-
-    print()
-    print("[2/2] Detecao de WAF (via Kali)...")
-    resp = mandar_pro_kali(f"waf {ip}")
-    print(resp[:500])
-
-    print()
-    print("SUGESTOES DE BYPASS")
-    print("  -> Verificar portas abertas para servicos vulneraveis.")
-    print("  -> Se WAF detectado, usar tecnicas de evasao.")
-    print("  -> Testar credenciais default em servicos como SSH e FTP.")
-
-    print()
-    print("[+] Tema 12 concluido!")
-
-def pipeline_completo():
-    print("PIPELINE AUTOMATICO")
-
-    print()
-    print(">>> FASE 1: REVERSE ENGINEERING <<<")
-    tema3_pipeline()
-
-    print()
-    print(">>> FASE 2: NETWORK SCANNING <<<")
-    tema12_pipeline()
-
-    print()
-    print("[+] Pipeline concluido! Ver relatorio para mais detalhes.")
-
 def main():
-    
-    global KALI_IP, KALI_PORTA
-    
-    kali_ip, kali_porta = deteta_kali_automatico()
-    if kali_ip:
-        KALI_IP = kali_ip
-        KALI_PORTA = kali_porta
-    
     while True:
         limpa()
         menu()
         op = input("> ").strip()
-
+        
         if op == "1":
-            tema3_pipeline()
-
+            ataca_tudo()
+        
         elif op == "2":
-            print("DETECAO DE PACKER")
-            c = input("Caminho do executavel: ").strip()
+            print("\nANALISE LOCAL")
+            c = input("Caminho: ").strip()
             if os.path.exists(c):
-                p = detecta_packer(c)
-                print()
-                print("Packer:", p["packer"])
-                print("Info:", p["info"])
+                analise = pe_analise(c)
+                packer = detecta_packer(c)
+                strings = tira_strings(c)
+                print(f"\nEntry Point: {analise.get('entry_point')}")
+                print(f"Packer: {packer.get('packer')}")
+                print(f"Strings: {strings.get('quantidade')}")
+                for s in strings["strings"][:10]:
+                    print(f"  -> {s[:80]}")
             else:
-                print("Erro: ficheiro nao existe!")
-
+                print("[!] Nao existe")
+        
         elif op == "3":
-            print("EXTRACAO DE STRINGS")
-            c = input("Caminho do executavel: ").strip()
-            if os.path.exists(c):
-                s = tira_strings(c)
-                print()
-                print("Strings encontradas:", s["quantidade"])
-                for st in s["strings"][:10]:
-                    print("  ->", st[:80])
+            print("\nSCAN")
+            ip = input("IP: ").strip()
+            if ip:
+                r = manda_kali_scan(f"scan {ip}")
+                print(r[:500])
             else:
-                print("Erro: ficheiro nao existe!")
-
+                print("[!] IP invalido")
+        
         elif op == "4":
-            print("SCAN DE PORTAS")
-            ip = input("IP ou dominio: ").strip()
-            if ip:
-                resp = mandar_pro_kali(f"scan {ip}")
-                print(resp[:500])
+            print("\nWEB")
+            ip = input("IP: ").strip()
+            porta = input("Porta: ").strip()
+            if ip and porta:
+                protocolo = "https" if porta == "443" else "http"
+                r = manda_kali_web(f"web {ip} {porta} {protocolo}")
+                print(r[:800])
             else:
-                print("Erro: IP invalido!")
-
-        elif op == "5":
-            print("DETECAO DE WAF")
-            ip = input("IP ou dominio: ").strip()
-            if ip:
-                resp = mandar_pro_kali(f"waf {ip}")
-                print(resp[:500])
-            else:
-                print("Erro: IP invalido!")
-
-        elif op == "7":
-            pipeline_completo()
-
+                print("[!] IP ou porta invalidos")
+        
         elif op == "0":
             print("[*] A sair...")
             break
-
+        
         else:
-            print("Opcao invalida!")
-
+            print("[!] Opcao invalida")
+        
         input("\n[ENTER] para continuar...")
 
 if __name__ == "__main__":

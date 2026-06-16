@@ -68,8 +68,12 @@ def detecta_packer(caminho):
     except:
         return {"packer": "Erro", "info": "Nao foi possivel ler o ficheiro."}
 
-def tira_strings(caminho):
-    # tenta sacar as strings do binario
+def tira_strings(caminho, max_strings=200):
+    """
+    Tira strings do binario.
+    Agora devolve mais strings (200 em vez de 50) 
+    para o orquestrador encontrar o IP do Pedro.
+    """
     try:
         f = open(caminho, "rb")
         dados = f.read()[:1000000]  # so os primeiros 1MB para nao demorar
@@ -96,6 +100,6 @@ def tira_strings(caminho):
             if s not in sem_dupes:
                 sem_dupes.append(s)
         
-        return {"strings": sem_dupes[:50], "quantidade": len(sem_dupes)}
+        return {"strings": sem_dupes[:max_strings], "quantidade": len(sem_dupes)}
     except:
         return {"strings": [], "quantidade": 0}
