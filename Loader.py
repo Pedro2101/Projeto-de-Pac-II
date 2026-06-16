@@ -304,8 +304,9 @@ def tema3_pipeline():
     
     else:
         if not interpretado["ips"]:
-            print("[*] LOADER: Nenhum IP encontrado nas strings.")
-            print("[*] LOADER: A enviar malware para Kali (Radare2) para analise profunda...")
+            print("[*] LOADER: Nao consegui encontrar nada util na analise local.")
+            print("[*] LOADER: Vou para o Kali fazer analise profunda com Radare2...")
+            print("[*] LOADER: Fica ai a ver que eu faco o trabalho.")
             
             if KALI_IP:
                 # manda automaticamente sem perguntar
