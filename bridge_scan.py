@@ -130,6 +130,7 @@ def processa(comando, conn=None):
     
     elif comando == "ENVIAR_FICHEIRO":
         if conn:
+            conn.send(b"OK")  # avisa o loader que recebeu
             caminho = recebe_ficheiro(conn)
             if "ERRO" in caminho:
                 return caminho
