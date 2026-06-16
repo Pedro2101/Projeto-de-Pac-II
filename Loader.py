@@ -6,6 +6,7 @@ import os
 import sys
 import socket
 import re
+import time  # <-- NOVO: para esperar entre verificações
 
 # o nosso bridge de RE 
 from bridge_re import pe_analise, detecta_packer, tira_strings
@@ -50,33 +51,121 @@ def mandar_pro_kali(comando):
         return "Erro: Kali nao respondeu. O bridge_scan.py esta a correr?"
 
 def mandar_ficheiro_pro_kali(caminho_ficheiro):
-    # isto envia o malware para o kali e pede para analisar
+    """
+    Envia o ficheiro para o Kali e recebe uma resposta RÁPIDA.
+    O Kali vai analisar em background, por isso nao esperamos pela analise completa.
+    """
     try:
+        # Cria a socket com timeout generoso (3 minutos)
         s = socket.socket()
-        s.settimeout(180)
+        s.settimeout(180)  # 3 minutos é suficiente para receber o ficheiro
         s.connect((KALI_IP, KALI_PORTA))
         
+        print("[*] Conectado ao Kali. A enviar comando...")
+        
+        # 1. Envia o comando ENVIAR_FICHEIRO
         s.send(b"ENVIAR_FICHEIRO")
-        s.recv(1024)
+        print("[*] Comando enviado. À espera de resposta do Kali...")
         
+        # 2. Recebe o OK do Kali (para começar a enviar)
+        resposta = s.recv(1024).decode()
+        print(f"[*] Kali respondeu: {resposta}")
+        
+        if resposta != "OK":
+            print("[!] O Kali não aceitou o pedido.")
+            s.close()
+            return "ERRO: Kali rejeitou o pedido de envio"
+        
+        # 3. Envia o tamanho do ficheiro
         tamanho = os.path.getsize(caminho_ficheiro)
+        print(f"[*] Tamanho do ficheiro: {tamanho} bytes")
         s.send(str(tamanho).encode())
-        s.recv(1024)
         
+        # 4. Espera confirmação do tamanho
+        resposta = s.recv(1024).decode()
+        print(f"[*] Kali confirmou: {resposta}")
+        
+        if resposta != "OK":
+            print("[!] O Kali rejeitou o tamanho.")
+            s.close()
+            return "ERRO: Kali rejeitou o tamanho do ficheiro"
+        
+        # 5. Envia o ficheiro em pedaços
+        print("[*] A enviar ficheiro...")
         with open(caminho_ficheiro, "rb") as f:
+            bytes_enviados = 0
             while True:
                 dados = f.read(4096)
                 if not dados:
                     break
                 s.send(dados)
+                bytes_enviados += len(dados)
+                
+                # Mostra progresso de 10 em 10%
+                if tamanho > 0 and bytes_enviados % (max(tamanho // 10, 1)) == 0 and bytes_enviados < tamanho:
+                    progresso = int((bytes_enviados / tamanho) * 100)
+                    print(f"[*] Progresso: {progresso}%")
         
+        print(f"[*] Ficheiro enviado! Total: {bytes_enviados} bytes")
+        
+        # 6. Envia FIM para avisar que acabou
         s.send(b"FIM")
+        print("[*] FIM enviado. A aguardar resposta do Kali...")
+        
+        # 7. Recebe a resposta RÁPIDA (não espera pela análise completa)
+        resultado = ""
+        while True:
+            try:
+                parte = s.recv(4096).decode()
+                if not parte:
+                    break
+                resultado += parte
+                # Se a resposta tiver "ID da análise" ou "FIM_ANALISE", paramos
+                if "ID da análise" in parte or "FIM_ANALISE" in parte:
+                    break
+            except socket.timeout:
+                print("[!] Timeout à espera de mais dados do Kali")
+                break
+        
+        s.close()
+        
+        if resultado == "":
+            return "ERRO: Kali não enviou resposta"
+        
+        return resultado
+        
+    except socket.timeout:
+        print("[!] TIMEOUT! O Kali demorou demasiado tempo.")
+        return "ERRO: Timeout - Kali não respondeu a tempo"
+        
+    except ConnectionRefusedError:
+        print("[!] Conexão recusada. O Kali está a correr?")
+        return "ERRO: Kali offline - conexão recusada"
+        
+    except Exception as e:
+        print(f"[!] Erro inesperado: {e}")
+        return f"ERRO: {e}"
+
+# NOVA FUNÇÃO: verificar o estado de uma análise no Kali
+def verificar_analise_kali(id_analise):
+    """
+    Pergunta ao Kali se a análise com Radare2 já terminou.
+    """
+    try:
+        s = socket.socket()
+        s.settimeout(10)
+        s.connect((KALI_IP, KALI_PORTA))
+        
+        comando = f"verificar_analise {id_analise}"
+        s.send(comando.encode())
         
         resultado = s.recv(4096).decode()
         s.close()
+        
         return resultado
+        
     except Exception as e:
-        return f"ERRO: {str(e)}"
+        return f"ERRO ao verificar análise: {e}"
 
 def limpa():
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -184,6 +273,21 @@ def interpreta_scan(resultado_scan):
     
     return portas_encontradas
 
+def extrair_id_analise(texto):
+    """
+    Tenta extrair o ID da análise da resposta do Kali.
+    Procura por "ID da análise: XXXXX"
+    """
+    linhas = texto.split("\n")
+    for linha in linhas:
+        if "ID da análise:" in linha:
+            # Pega tudo depois de "ID da análise:"
+            partes = linha.split("ID da análise:")
+            if len(partes) >= 2:
+                id_analise = partes[1].strip()
+                return id_analise
+    return None
+
 def tema3_pipeline():
     print("REVERSE ENGINEERING")
     caminho = input("Caminho do executavel: ").strip()
@@ -272,6 +376,17 @@ def tema3_pipeline():
                     resultado_kali = mandar_ficheiro_pro_kali(caminho)
                     print(f"[Kali] {resultado_kali[:500]}")
                     
+                    # Tenta extrair o ID da análise
+                    id_analise = extrair_id_analise(resultado_kali)
+                    if id_analise:
+                        print(f"[*] ID da análise: {id_analise}")
+                        print("[*] O Kali está a analisar o ficheiro em background.")
+                        print("[*] Podes verificar o resultado mais tarde com: verificar_analise_kali()")
+                        
+                        # Guarda o ID no ficheiro de log
+                        with open("alvos.txt", "a") as f:
+                            f.write(f"\n[ID_ANALISE] {id_analise}\n")
+                    
                     with open("alvos.txt", "a") as f:
                         f.write(f"\n[KALI_ANALISE] {caminho}\n")
                         f.write(resultado_kali[:500])
@@ -298,12 +413,47 @@ def tema3_pipeline():
         if not interpretado["ips"]:
             print("[*] LOADER: Nao consegui encontrar nada util na analise local.")
             print("[*] LOADER: Vou para o Kali fazer analise profunda com Radare2...")
-            print("[*] LOADER: Fica ai a ver que eu faco o trabalho.")
+            print("[*] LOADER: O Kali vai analisar em background (pode demorar).")
             
             if KALI_IP:
                 # manda automaticamente sem perguntar
                 resultado_kali = mandar_ficheiro_pro_kali(caminho)
-                print(f"\n[Kali] Resultado do Radare2:\n{resultado_kali[:500]}")
+                print(f"\n[Kali] Resposta:\n{resultado_kali[:500]}")
+                
+                # Tenta extrair o ID da análise
+                id_analise = extrair_id_analise(resultado_kali)
+                if id_analise:
+                    print(f"[*] ID da análise: {id_analise}")
+                    print("[*] O Kali está a analisar o ficheiro em background.")
+                    print("[*] Podes verificar o resultado mais tarde.")
+                    
+                    # Guarda o ID no ficheiro de log
+                    with open("alvos.txt", "a") as f:
+                        f.write(f"\n[ID_ANALISE] {id_analise}\n")
+                    
+                    # PERGUNTA: verificar agora?
+                    resp = input("[*] Queres aguardar pela análise? (pode demorar) (s/n): ")
+                    if resp.lower() == "s":
+                        print("[*] A verificar estado...")
+                        tentativas = 0
+                        while tentativas < 10:  # Máximo 10 tentativas (30 segundos)
+                            time.sleep(3)  # Espera 3 segundos entre verificações
+                            estado = verificar_analise_kali(id_analise)
+                            tentativas += 1
+                            
+                            if "ANALISE_CONCLUIDA" in estado:
+                                print("[*] Análise concluída!")
+                                print(estado[:500])
+                                break
+                            elif "ANALISE_PENDENTE" in estado:
+                                print(f"[*] Ainda a analisar... (tentativa {tentativas}/10)")
+                            elif "ANALISE_NAO_ENCONTRADA" in estado:
+                                print("[!] ID não encontrado. Pode ter expirado.")
+                                break
+                            else:
+                                print(f"[*] Estado: {estado[:100]}")
+                        else:
+                            print("[*] A análise ainda não terminou. Podes verificar depois.")
                 
                 # tenta extrair IPs e portas do resultado do Kali
                 # converte o resultado em strings para interpretar
