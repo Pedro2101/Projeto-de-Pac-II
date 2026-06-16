@@ -1,5 +1,5 @@
 # Bridge de Network Scanning - Tema 12
-# Corre no Kali do Pedro recebe comandos o  meu loader.py (jeremias)
+# Corre no Kali do Pedro recebe comandos do loader.py do jeremias
 
 import socket
 import subprocess
