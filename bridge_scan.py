@@ -130,31 +130,18 @@ def processa(comando, conn=None):
     
     elif comando == "ENVIAR_FICHEIRO":
         if conn:
-            conn.send(b"OK")  # avisa o loader que recebeu
+            conn.send(b"OK")
             caminho = recebe_ficheiro(conn)
             if "ERRO" in caminho:
                 return caminho
             
-            # faz analise basica do ficheiro recebido
-            resultado = f"Ficheiro recebido: {caminho}\n"
-            resultado += f"Tamanho: {os.path.getsize(caminho)} bytes\n"
-            
-            # tenta descomprimir se for UPX
-            resultado += "\n[1] A testar UPX...\n"
-            resultado += descomprime_upx(caminho)
-            
-            # analise com radare2
-            resultado += "\n[2] A analisar com radare2...\n"
-            # resultado += analisa_radare2(caminho)
-            
-            # se tiver ip, sugere exploit
-            # tenta extrair ip do nome ou de algum lugar
-            resultado += "\n[3] Analise concluida.\n"
-            resultado += "Sugestao: executar nmap para descobrir portas e depois gerar exploit.\n"
+            resultado = "Ficheiro recebido: " + caminho + "\n"
+            resultado += "Tamanho: " + str(os.path.getsize(caminho)) + " bytes\n"
+            resultado += "\n[1] Ficheiro guardado com sucesso!\n"
             
             return resultado
         else:
-            return "ERRO: Comando enviar_ficheiro sem conexao"
+            return "ERRO: Comando ENVIAR_FICHEIRO sem conexao"
     
     elif comando.startswith("gerar_exploit"):
         # formato: gerar_exploit ip porta
