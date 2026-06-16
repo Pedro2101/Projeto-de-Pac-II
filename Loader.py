@@ -53,7 +53,7 @@ def mandar_ficheiro_pro_kali(caminho_ficheiro):
     # isto envia o malware para o kali e pede para analisar
     try:
         s = socket.socket()
-        s.settimeout(60)
+        s.settimeout(180)
         s.connect((KALI_IP, KALI_PORTA))
         
         s.send(b"ENVIAR_FICHEIRO")
