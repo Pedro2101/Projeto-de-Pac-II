@@ -5,8 +5,14 @@ import socket
 import subprocess
 import os
 import time
+import threading  # <-- NOVO: para correr coisas em background
 
 PORTA = 9999
+
+# Dicionário para guardar resultados de análises em background
+# Isto é como um "post-it" para o Kali lembrar-se do que já analisou
+analises_pendentes = {}
+analises_concluidas = {}
 
 def corre_nmap_portas(ip):
     try:
@@ -42,16 +48,116 @@ def descomprime_upx(caminho):
     except:
         return "Erro ao executar upx"
 
-def analisa_radare2(caminho):
-    # analise rapida com radare2
+def analisa_radare2_background(caminho, id_analise):
+    """
+    Esta função corre em background (numa thread separada).
+    Não bloqueia o fluxo principal.
+    """
+    print(f"[*] Background: A analisar {caminho} com Radare2...")
+    print(f"[*] ID da análise: {id_analise}")
+    
     try:
+        # Marca que a análise começou
+        analises_pendentes[id_analise] = "A analisar..."
+        
+        # Corre o Radare2 (pode demorar minutos)
         r = subprocess.run(
             ["r2", "-A", "-q", "-c", "afl; q", caminho],
-            capture_output=True, text=True, timeout=180
+            capture_output=True, text=True, timeout=600  # 10 minutos para ficheiros grandes
         )
-        return r.stdout[:1000]
-    except:
-        return "Erro ao executar radare2"
+        
+        # Guarda o resultado
+        resultado = r.stdout[:1000]
+        
+        # Se o resultado for muito pequeno, tenta outra abordagem
+        if len(resultado) < 50:
+            # Tenta com strings
+            r2_strings = subprocess.run(
+                ["r2", "-q", "-c", "izz; q", caminho],
+                capture_output=True, text=True, timeout=60
+            )
+            resultado += "\n\n[STRINGS]\n" + r2_strings.stdout[:500]
+        
+        # Guarda no dicionário de concluídas
+        analises_concluidas[id_analise] = resultado
+        
+        # Remove da lista de pendentes
+        if id_analise in analises_pendentes:
+            del analises_pendentes[id_analise]
+            
+        print(f"[*] Background: Análise {id_analise} concluída!")
+        
+    except Exception as e:
+        print(f"[!] Background: Erro na análise {id_analise}: {e}")
+        analises_concluidas[id_analise] = f"ERRO na análise: {e}"
+        if id_analise in analises_pendentes:
+            del analises_pendentes[id_analise]
+
+def recebe_ficheiro(conn):
+    """
+    Recebe o ficheiro do loader e devolve uma resposta RÁPIDA.
+    A análise profunda com Radare2 vai correr em background.
+    """
+    try:
+        # Recebe o tamanho do ficheiro
+        dados = conn.recv(1024).decode()
+        if not dados:
+            return "ERRO: Não recebi tamanho"
+            
+        try:
+            tamanho = int(dados.strip())
+        except:
+            return "ERRO: Tamanho inválido"
+            
+        conn.send(b"OK")
+        
+        # 2. Recebe o ficheiro
+        caminho = "/tmp/malware_recebido.exe"
+        f = open(caminho, "wb")
+        
+        recebido = 0
+        while recebido < tamanho:
+            dados = conn.recv(4096)
+            if not dados:
+                break
+            f.write(dados)
+            recebido += len(dados)
+        
+        f.close()
+        print(f"[*] Ficheiro recebido: {recebido} bytes")
+        
+        # 3. Recebe o FIM
+        fim = conn.recv(1024).decode()
+        if fim != "FIM":
+            print(f"[!] Não recebi FIM, recebi: {fim}")
+        
+        # 4. RESPOSTA RÁPIDA (antes da análise)
+        resultado = f"Ficheiro recebido com sucesso!\n"
+        resultado += f"Tamanho: {recebido} bytes\n"
+        resultado += f"Guardado em: {caminho}\n"
+        resultado += f"\n[!] A analisar em background com Radare2...\n"
+        resultado += f"[!] O resultado estará disponível depois.\n"
+        
+        # 5. INICIA A ANÁLISE EM BACKGROUND
+        # Gera um ID único para esta análise
+        import time
+        id_analise = f"analise_{int(time.time())}_{os.path.basename(caminho)}"
+        
+        # Cria uma thread para correr a análise
+        thread = threading.Thread(
+            target=analisa_radare2_background,
+            args=(caminho, id_analise)
+        )
+        thread.daemon = True  # A thread morre se o programa principal morrer
+        thread.start()
+        
+        # Guarda o ID da análise para referência futura
+        resultado += f"\nID da análise: {id_analise}\n"
+        
+        return resultado
+        
+    except Exception as e:
+        return f"ERRO ao receber ficheiro: {str(e)}"
 
 def gera_exploit_simples(ip, porta, caminho_malware):
     nome = f"/tmp/exploit_{ip.replace('.', '_')}_{porta}.py"
@@ -89,31 +195,6 @@ s.close()
     open(nome, "w").write(codigo)
     return f"Exploit gerado: {nome}"
 
-def recebe_ficheiro(conn):
-    # recebe o tamanho do ficheiro
-    try:
-        tamanho = conn.recv(1024).decode()
-        tamanho = int(tamanho.strip())
-        conn.send(b"OK")
-        
-        caminho = "/tmp/malware.exe"
-        f = open(caminho, "wb")
-        
-        recebido = 0
-        while recebido < tamanho:
-            dados = conn.recv(4096)
-            if not dados:
-                break
-            f.write(dados)
-            recebido += len(dados)
-        
-        f.close()
-        conn.recv(1024)  # espera o FIM
-        
-        return caminho
-    except Exception as e:
-        return "ERRO: " + str(e)
-
 def processa(comando, conn=None):
     # processa comandos do loader
     
@@ -130,16 +211,8 @@ def processa(comando, conn=None):
     
     elif comando == "ENVIAR_FICHEIRO":
         if conn:
-            conn.send(b"OK")
-            caminho = recebe_ficheiro(conn)
-            if "ERRO" in caminho:
-                return caminho
-            
-            resultado = "Ficheiro recebido: " + caminho + "\n"
-            resultado += "Tamanho: " + str(os.path.getsize(caminho)) + " bytes\n"
-            resultado += "\n[1] Ficheiro guardado com sucesso!\n"
-            
-            return resultado
+            # O conn.send(b"OK") já está dentro do recebe_ficheiro()
+            return recebe_ficheiro(conn)
         else:
             return "ERRO: Comando ENVIAR_FICHEIRO sem conexao"
     
@@ -152,6 +225,22 @@ def processa(comando, conn=None):
             return gera_exploit_simples(ip, porta, "")
         else:
             return "ERRO: Uso: gerar_exploit <ip> <porta>"
+    
+    # NOVO: comando para verificar o estado de uma análise
+    elif comando.startswith("verificar_analise"):
+        partes = comando.split(" ")
+        if len(partes) >= 2:
+            id_analise = partes[1]
+            
+            # Verifica se a análise já está concluída
+            if id_analise in analises_concluidas:
+                return f"ANALISE_CONCLUIDA\n{analises_concluidas[id_analise]}"
+            elif id_analise in analises_pendentes:
+                return f"ANALISE_PENDENTE: {analises_pendentes[id_analise]}"
+            else:
+                return "ANALISE_NAO_ENCONTRADA"
+        else:
+            return "ERRO: Uso: verificar_analise <id>"
     
     else:
         return f"Comando desconhecido: {comando}"
@@ -166,6 +255,7 @@ def main():
     print("Bridge Scan - Kali do Pedro")
     print(f"A escutar na porta {PORTA}")
     print("Comandos disponiveis: scan, waf, ENVIAR_FICHEIRO, gerar_exploit, ping")
+    print("NOVO: verificar_analise <id>")
     print("="*50)
     
     while True:
@@ -176,7 +266,12 @@ def main():
         print(f"[*] Comando: {comando}")
         
         resultado = processa(comando, conn)
-        conn.send(resultado.encode()[:4096])
+        
+        # Corta a resposta se for muito grande (para não sobrecarregar)
+        if len(resultado) > 4000:
+            resultado = resultado[:4000] + "\n[... TRUNCADO ...]"
+            
+        conn.send(resultado.encode())
         conn.close()
         
         print("[*] Resposta enviada")
