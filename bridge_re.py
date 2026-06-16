@@ -69,33 +69,33 @@ def detecta_packer(caminho):
         return {"packer": "Erro", "info": "Nao foi possivel ler o ficheiro."}
 
 def tira_strings(caminho):
-    # devolve todas as strings do binario, sem filtro
+    # tenta sacar as strings do binario
     try:
         f = open(caminho, "rb")
-        dados = f.read().decode('latin-1', errors='ignore')
+        dados = f.read()[:1000000]  # so os primeiros 1MB para nao demorar
         f.close()
         
-        # apanha strings de tamanho razoavel entre 4 a 50 caracteres
-        strings_encontradas = []
-        palavra_atual = ""
+        texto = dados.decode('latin-1', errors='ignore')
         
-        for c in dados:
+        strings = []
+        palavra = ""
+        for c in texto:
             if c.isprintable() or c in '\n\r\t':
-                palavra_atual += c
+                palavra += c
             else:
-                if len(palavra_atual) >= 4:
-                    strings_encontradas.append(palavra_atual.strip())
-                palavra_atual = ""
+                if len(palavra) >= 4:
+                    strings.append(palavra.strip())
+                palavra = ""
         
-        if len(palavra_atual) >= 4:
-            strings_encontradas.append(palavra_atual.strip())
+        if len(palavra) >= 4:
+            strings.append(palavra.strip())
         
-        # remove duplicados
-        strings_sem_dupes = []
-        for s in strings_encontradas:
-            if s not in strings_sem_dupes:
-                strings_sem_dupes.append(s)
+        # tira duplicados
+        sem_dupes = []
+        for s in strings:
+            if s not in sem_dupes:
+                sem_dupes.append(s)
         
-        return {"strings": strings_sem_dupes[:100], "quantidade": len(strings_sem_dupes)}
+        return {"strings": sem_dupes[:50], "quantidade": len(sem_dupes)}
     except:
         return {"strings": [], "quantidade": 0}
