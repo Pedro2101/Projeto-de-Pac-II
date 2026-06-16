@@ -61,7 +61,7 @@ def detecta_packer(caminho):
         if possiveis_packers:
             return {
                 "packer": "Possivel packer detectado", 
-                "info": f"Strings encontradas: {', '.join(possiveis_packers)}. Pesquisar manualmente."
+                "info": f"Strings encontradas: {', '.join(possiveis_packers)}."
             }
         else:
             return {"packer": "Nenhum", "info": "Nenhuma string de packer conhecida encontrada."}
