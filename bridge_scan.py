@@ -47,7 +47,7 @@ def analisa_radare2(caminho):
     try:
         r = subprocess.run(
             ["r2", "-A", "-q", "-c", "afl; q", caminho],
-            capture_output=True, text=True, timeout=60
+            capture_output=True, text=True, timeout=180
         )
         return r.stdout[:1000]
     except:
