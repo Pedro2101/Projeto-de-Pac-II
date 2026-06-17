@@ -189,80 +189,82 @@ def testa_web_site(ip, porta, protocolo="http"):
     """
     print(f"[*] A testar site: {protocolo}://{ip}:{porta}")
     
-    url_base = f"{protocolo}://{ip}:{porta}"
+    # ===== CORREÇÃO: TESTA MÚLTIPLAS ROTAS =====
+    rotas = ["", "/vuln", "/xss"]
+    todas_vulns = []
     
-    # Primeiro, tenta descobrir se há parâmetros na página
-    # Usa curl para obter o HTML da página inicial
-    cmd = f"curl -s -m 10 '{url_base}'"
+    for rota in rotas:
+        url_base = f"{protocolo}://{ip}:{porta}{rota}"
+        print(f"[*] A testar rota: {url_base}")
+        
+        # Usa curl para obter o HTML da página
+        cmd = f"curl -s -k -m 10 '{url_base}'"
+        
+        try:
+            print(f"[*] A recolher parâmetros de {url_base}...")
+            resultado = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=15
+            )
+            
+            html = resultado.stdout
+            
+            # Procura por parâmetros em formulários e links
+            parametros_encontrados = set()
+            
+            # Procura por <form action="...">
+            forms = re.findall(r'<form[^>]*action=[\'"]([^\'"]+)[\'"][^>]*>', html, re.IGNORECASE)
+            for form in forms:
+                inputs = re.findall(r'<input[^>]*name=[\'"]([^\'"]+)[\'"][^>]*>', html, re.IGNORECASE)
+                for inp in inputs:
+                    parametros_encontrados.add(inp)
+            
+            # Procura por links com parâmetros
+            links = re.findall(r'href=[\'"]([^\'"]*\?[^\'"]+)[\'"]', html, re.IGNORECASE)
+            for link in links:
+                if "?" in link:
+                    partes = link.split("?")
+                    if len(partes) > 1:
+                        params = partes[1].split("&")
+                        for param in params:
+                            if "=" in param:
+                                nome_param = param.split("=")[0]
+                                parametros_encontrados.add(nome_param)
+            
+            # Se não encontrou parâmetros, usa alguns comuns
+            if not parametros_encontrados:
+                parametros_encontrados = {"id", "page", "file", "user", "username", "q", "search", "cat"}
+                print("[*] Nenhum parâmetro encontrado. A usar lista de parâmetros comuns.")
+            
+            print(f"[*] Parâmetros a testar: {', '.join(list(parametros_encontrados)[:10])}")
+            
+            # Testa cada parâmetro para cada vulnerabilidade
+            for parametro in list(parametros_encontrados)[:20]:
+                # Testa SQLi
+                sqli_result = testa_sqli(url_base, parametro)
+                if sqli_result:
+                    todas_vulns.append(sqli_result)
+                
+                # Testa XSS
+                xss_result = testa_xss(url_base, parametro)
+                if xss_result:
+                    todas_vulns.append(xss_result)
+                
+                # Testa LFI
+                lfi_result = testa_lfi(url_base, parametro)
+                if lfi_result:
+                    todas_vulns.append(lfi_result)
+        
+        except Exception as e:
+            print(f"[!] Erro ao testar rota {rota}: {e}")
     
-    try:
-        print(f"[*] A recolher parâmetros de {url_base}...")
-        resultado = subprocess.run(
-            cmd,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=15
-        )
-        
-        html = resultado.stdout
-        
-        # Procura por parâmetros em formulários e links
-        parametros_encontrados = set()
-        
-        # Procura por <form action="...">
-        forms = re.findall(r'<form[^>]*action=[\'"]([^\'"]+)[\'"][^>]*>', html, re.IGNORECASE)
-        for form in forms:
-            # Procura por inputs dentro do form
-            inputs = re.findall(r'<input[^>]*name=[\'"]([^\'"]+)[\'"][^>]*>', html, re.IGNORECASE)
-            for inp in inputs:
-                parametros_encontrados.add(inp)
-        
-        # Procura por links com parâmetros (?param=valor)
-        links = re.findall(r'href=[\'"]([^\'"]*\?[^\'"]+)[\'"]', html, re.IGNORECASE)
-        for link in links:
-            if "?" in link:
-                partes = link.split("?")
-                if len(partes) > 1:
-                    params = partes[1].split("&")
-                    for param in params:
-                        if "=" in param:
-                            nome_param = param.split("=")[0]
-                            parametros_encontrados.add(nome_param)
-        
-        # Se não encontrou parâmetros, usa alguns comuns para teste
-        if not parametros_encontrados:
-            parametros_encontrados = {"id", "page", "file", "user", "username", "q", "search", "cat"}
-            print("[*] Nenhum parâmetro encontrado. A usar lista de parâmetros comuns.")
-        
-        print(f"[*] Parâmetros encontrados: {', '.join(list(parametros_encontrados)[:10])}")
-        
-        # Testa cada parâmetro para cada vulnerabilidade
-        vulnerabilidades = []
-        
-        for parametro in list(parametros_encontrados)[:20]:  # Limita a 20 para não sobrecarregar
-            # Testa SQLi
-            sqli_result = testa_sqli(url_base, parametro)
-            if sqli_result:
-                vulnerabilidades.append(sqli_result)
-            
-            # Testa XSS
-            xss_result = testa_xss(url_base, parametro)
-            if xss_result:
-                vulnerabilidades.append(xss_result)
-            
-            # Testa LFI
-            lfi_result = testa_lfi(url_base, parametro)
-            if lfi_result:
-                vulnerabilidades.append(lfi_result)
-        
-        if vulnerabilidades:
-            return "\n".join(vulnerabilidades)
-        else:
-            return "Nenhuma vulnerabilidade encontrada."
-            
-    except Exception as e:
-        return f"Erro ao testar site: {e}"
+    if todas_vulns:
+        return "\n".join(todas_vulns)
+    else:
+        return "Nenhuma vulnerabilidade encontrada."
 
 def processa(comando):
     """
