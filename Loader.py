@@ -435,7 +435,8 @@ def ataca_tudo():
     todos_dados = {"emails": [], "credenciais": [], "urls": []}
     
     for porta in portas_web:
-        protocolo = "https" if porta == "443" else "http"
+        # ===== CORREÇÃO: HTTPS para portas SSL =====
+        protocolo = "https" if porta in ["443", "8443"] else "http"
         print(f"\n[*] Testando {protocolo}://{ip_alvo}:{porta}")
         
         resultado_web = manda_kali_web(f"web {ip_alvo} {porta} {protocolo}")
@@ -603,7 +604,7 @@ def main():
             ip = input("IP: ").strip()
             porta = input("Porta: ").strip()
             if ip and porta:
-                protocolo = "https" if porta == "443" else "http"
+                protocolo = "https" if porta in ["443", "8443"] else "http"
                 r = manda_kali_web(f"web {ip} {porta} {protocolo}")
                 print(r[:800])
             else:

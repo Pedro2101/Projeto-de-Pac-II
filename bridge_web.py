@@ -286,7 +286,11 @@ def processa(comando):
         
         ip = partes[1]
         porta = partes[2]
-        protocolo = "http" if len(partes) < 4 else partes[3]
+        # Se a porta for 443 ou 8443, usa HTTPS por defeito
+        if len(partes) < 4:
+            protocolo = "https" if porta in ["443", "8443"] else "http"
+        else:
+            protocolo = partes[3]
         
         # VERIFICA SE É UMA PORTA VÁLIDA (QUALQUER PORTA)
         try:
